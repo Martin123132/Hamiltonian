@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hamiltonian</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail" aria-label="Workspace">
+        <div class="brand">
+          <span class="mark">H</span>
+          <div>
+            <strong>Hamiltonian</strong>
+            <span>Agent operations</span>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="active" href="#cockpit">Cockpit</a>
+          <a href="#agents">Agents</a>
+          <a href="#gates">Gates</a>
+          <a href="#runs">Runs</a>
+          <a href="#tools">Tools</a>
+        </nav>
+        <div class="rail-foot">
+          <span>Boundary</span>
+          <strong>AgentLedger is optional evidence.</strong>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Flight software for agentic systems</p>
+            <h1>Run any agent. Trust none. Keep evidence when it matters.</h1>
+          </div>
+          <form id="repo-form" class="repo-form">
+            <label for="repo-input">Repo</label>
+            <input id="repo-input" name="repo" autocomplete="off" />
+            <button type="submit" title="Refresh cockpit state">Refresh</button>
+          </form>
+        </header>
+
+        <section class="status-strip" aria-label="Current runtime status">
+          <div>
+            <span>Workspace</span>
+            <strong id="repo-name">Loading</strong>
+          </div>
+          <div>
+            <span>Git</span>
+            <strong id="git-state">Checking</strong>
+          </div>
+          <div>
+            <span>Agents</span>
+            <strong id="agent-count">0 lanes</strong>
+          </div>
+          <div>
+            <span>Gates</span>
+            <strong id="gate-count">0 active</strong>
+          </div>
+        </section>
+
+        <div class="grid">
+          <section id="cockpit" class="panel command-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Task control</p>
+                <h2>Assign bounded work</h2>
+              </div>
+              <select id="agent-select" aria-label="Agent lane"></select>
+            </div>
+            <textarea
+              id="task-input"
+              spellcheck="true"
+              placeholder="Patch the repo, run the proof, and prepare a handoff."
+            ></textarea>
+            <div class="command-row">
+              <button id="draft-button" type="button">Draft packet</button>
+              <button id="gate-button" type="button">Gate plan</button>
+              <button id="record-button" type="button">Attach evidence</button>
+            </div>
+            <div id="packet-preview" class="packet-preview">
+              <span>No packet drafted yet.</span>
+            </div>
+          </section>
+
+          <section id="agents" class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Agent lanes</p>
+                <h2>Workers behind the cockpit</h2>
+              </div>
+            </div>
+            <div id="agent-list" class="lane-list"></div>
+          </section>
+
+          <section id="gates" class="panel wide">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Runtime path</p>
+                <h2>Memory, policy, execution, proof</h2>
+              </div>
+              <span id="generated-at" class="timestamp">Waiting</span>
+            </div>
+            <div id="lifecycle" class="timeline"></div>
+            <div id="gate-list" class="gate-list"></div>
+          </section>
+
+          <section id="tools" class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Tool mesh</p>
+                <h2>Local modules</h2>
+              </div>
+            </div>
+            <div id="integration-list" class="integration-list"></div>
+          </section>
+
+          <section id="runs" class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Task packets</p>
+                <h2>Recent orchestration proof</h2>
+              </div>
+            </div>
+            <div id="packet-list" class="packet-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Next build</p>
+                <h2>Market wedge</h2>
+              </div>
+            </div>
+            <ol id="next-actions" class="action-list"></ol>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
