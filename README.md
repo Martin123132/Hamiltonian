@@ -65,6 +65,11 @@ The cockpit now persists local task packets under:
     agentledger-placeholder.json
 ```
 
+Each packet includes an explicit lane assignment and gate-run summary. The lane
+records which adapter was selected and confirms that remote execution stayed off
+in the prototype. The gate run records counts, blocked gates, simulated gates,
+and the next operator action.
+
 The packet stages are:
 
 - `draft`: save the operator task and selected agent lane.

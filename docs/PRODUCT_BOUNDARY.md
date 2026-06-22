@@ -63,7 +63,9 @@ capture:
 
 - the operator task
 - the selected lane or adapter
+- the lane assignment and execution boundary
 - gate decisions and fallback reasons
+- the gate-run status and next operator action
 - handoff state
 - optional evidence references
 

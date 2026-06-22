@@ -339,6 +339,11 @@ textarea {
   margin: 0;
 }
 
+.packet .packet-next {
+  color: var(--ink);
+  font-weight: 650;
+}
+
 .pill {
   align-self: start;
   border-radius: 999px;

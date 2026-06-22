@@ -12,12 +12,29 @@ from .core import ensure_repo, write_text
 from .integrations import IntegrationStatus, detect_integrations
 
 
-AGENTS: dict[str, str] = {
-    "codex": "Codex",
-    "openclaw": "OpenClaw adapter",
-    "hermes": "Hermes adapter",
-    "local": "Local runner",
+LANE_CATALOG: dict[str, dict[str, str]] = {
+    "codex": {
+        "name": "Codex",
+        "kind": "local-agent",
+        "summary": "Primary local implementation lane behind Hamiltonian gates.",
+    },
+    "openclaw": {
+        "name": "OpenClaw adapter",
+        "kind": "external-agent-adapter",
+        "summary": "External agent lane selected through an adapter boundary; no remote execution occurs in this prototype.",
+    },
+    "hermes": {
+        "name": "Hermes adapter",
+        "kind": "external-agent-adapter",
+        "summary": "External agent lane selected through an adapter boundary; no remote execution occurs in this prototype.",
+    },
+    "local": {
+        "name": "Local runner",
+        "kind": "local-runner",
+        "summary": "Direct local command lane, still gated before any future execution path.",
+    },
 }
+AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATALOG.items()}
 
 STAGES = {"draft", "gate", "record"}
 DANGEROUS_MARKERS = (
@@ -43,17 +60,44 @@ class GateResult:
 
 
 @dataclass(frozen=True)
+class LaneAssignment:
+    id: str
+    name: str
+    kind: str
+    status: str
+    execution: str
+    remote_execution: bool
+    summary: str
+
+
+@dataclass(frozen=True)
+class GateRunSummary:
+    status: str
+    total: int
+    completed: int
+    pending: int
+    skipped: int
+    simulated: int
+    warnings: int
+    blocked: int
+    blocked_gate_ids: list[str]
+    next_action: str
+
+
+@dataclass(frozen=True)
 class TaskPacket:
     packet_id: str
     created_at: str
     repo: str
     agent_id: str
     agent_name: str
+    lane: LaneAssignment
     task: str
     stage: str
     status: str
     attach_evidence: bool
     gates: list[GateResult]
+    gate_run: GateRunSummary
     packet_dir: str
     files: dict[str, str]
 
@@ -82,6 +126,26 @@ def _has_dangerous_marker(task: str) -> str | None:
         if marker in lowered:
             return marker
     return None
+
+
+def _lane_assignment(agent_id: str, stage: str) -> LaneAssignment:
+    lane = LANE_CATALOG[agent_id]
+    external = lane["kind"] == "external-agent-adapter"
+    return LaneAssignment(
+        id=agent_id,
+        name=lane["name"],
+        kind=lane["kind"],
+        status="selected" if stage == "draft" else "assigned",
+        execution=(
+            "not-started"
+            if stage == "draft"
+            else "adapter-boundary-only"
+            if external
+            else "local-boundary-only"
+        ),
+        remote_execution=False,
+        summary=lane["summary"],
+    )
 
 
 def _pending_gates() -> list[GateResult]:
@@ -119,6 +183,45 @@ def _pending_gates() -> list[GateResult]:
             integration="AgentLedger",
         ),
     ]
+
+
+def _gate_run_summary(stage: str, gates: list[GateResult], attach_evidence: bool) -> GateRunSummary:
+    pending = sum(1 for gate in gates if gate.status == "pending")
+    skipped = sum(1 for gate in gates if gate.status == "skipped")
+    simulated = sum(1 for gate in gates if gate.status == "simulated")
+    warnings = sum(1 for gate in gates if gate.status == "warn")
+    blocked_gate_ids = [gate.id for gate in gates if gate.status == "block"]
+    blocked = len(blocked_gate_ids)
+    completed = sum(1 for gate in gates if gate.status not in {"pending", "skipped"})
+
+    if stage == "draft":
+        status = "pending"
+        next_action = "Run Gate plan to check memory, intent, and cost before work starts."
+    elif blocked:
+        status = "blocked"
+        next_action = "Rewrite the task or change lanes before any execution path is allowed."
+    elif warnings:
+        status = "needs-review"
+        next_action = "Review warnings, then keep work bounded before execution."
+    elif attach_evidence:
+        status = "evidence-attached"
+        next_action = "Ready for operator review with local evidence represented; execution remains manual."
+    else:
+        status = "ready"
+        next_action = "Ready for operator review; evidence remains off unless explicitly requested."
+
+    return GateRunSummary(
+        status=status,
+        total=len(gates),
+        completed=completed,
+        pending=pending,
+        skipped=skipped,
+        simulated=simulated,
+        warnings=warnings,
+        blocked=blocked,
+        blocked_gate_ids=blocked_gate_ids,
+        next_action=next_action,
+    )
 
 
 def _run_gates(
@@ -254,6 +357,8 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         f"- Packet: `{packet.packet_id}`",
         f"- Repo: `{packet.repo}`",
         f"- Agent: `{packet.agent_name}`",
+        f"- Lane kind: `{packet.lane.kind}`",
+        f"- Lane execution: `{packet.lane.execution}`",
         f"- Stage: `{packet.stage}`",
         f"- Status: **{packet.status.upper()}**",
         f"- Evidence requested: `{packet.attach_evidence}`",
@@ -262,11 +367,29 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         "",
         packet.task,
         "",
+        "## Lane Assignment",
+        "",
+        f"- Lane: `{packet.lane.name}`",
+        f"- Status: `{packet.lane.status}`",
+        f"- Remote execution: `{packet.lane.remote_execution}`",
+        f"- Summary: {packet.lane.summary}",
+        "",
         "## Gates",
     ]
     for gate in packet.gates:
         artifact = f" Artifact: `{gate.artifact_path}`" if gate.artifact_path else ""
         lines.append(f"- {gate.name}: {gate.status} ({gate.mode}). {gate.summary}{artifact}")
+    lines.extend(
+        [
+            "",
+            "## Gate Run",
+            "",
+            f"- Status: `{packet.gate_run.status}`",
+            f"- Completed: `{packet.gate_run.completed}/{packet.gate_run.total}`",
+            f"- Blocked gates: `{', '.join(packet.gate_run.blocked_gate_ids) or 'none'}`",
+            f"- Next action: {packet.gate_run.next_action}",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -308,36 +431,31 @@ def create_task_packet(
         if normalized_stage == "draft"
         else _run_gates(repo, clean_task, evidence_requested, integrations, packet_dir)
     )
+    gate_run = _gate_run_summary(normalized_stage, gates, evidence_requested)
+    packet_json = packet_dir / "task-packet.json"
+    packet_md = packet_dir / "task-packet.md"
     packet = TaskPacket(
         packet_id=packet_id,
         created_at=datetime.now(timezone.utc).isoformat(),
         repo=str(repo),
         agent_id=normalized_agent,
         agent_name=AGENTS[normalized_agent],
+        lane=_lane_assignment(normalized_agent, normalized_stage),
         task=clean_task,
         stage=normalized_stage,
         status=_packet_status(normalized_stage, gates, evidence_requested),
         attach_evidence=evidence_requested,
         gates=gates,
+        gate_run=gate_run,
         packet_dir=str(packet_dir),
-        files={},
+        files={
+            "json": str(packet_json),
+            "markdown": str(packet_md),
+        },
     )
-
-    packet_json = packet_dir / "task-packet.json"
-    packet_md = packet_dir / "task-packet.md"
-    packet_with_files = TaskPacket(
-        **{
-            **asdict(packet),
-            "gates": gates,
-            "files": {
-                "json": str(packet_json),
-                "markdown": str(packet_md),
-            },
-        }
-    )
-    write_text(packet_json, json.dumps(asdict(packet_with_files), indent=2))
-    write_text(packet_md, build_packet_markdown(packet_with_files))
-    return packet_with_files
+    write_text(packet_json, json.dumps(asdict(packet), indent=2))
+    write_text(packet_md, build_packet_markdown(packet))
+    return packet
 
 
 def load_task_packet(path: Path) -> dict[str, Any]:
@@ -348,15 +466,38 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
     gates = packet.get("gates", [])
     evidence_gate = next((gate for gate in gates if gate.get("id") == "evidence"), {})
     memory_gate = next((gate for gate in gates if gate.get("id") == "memory"), {})
+    lane = packet.get("lane") or {
+        "id": packet.get("agent_id"),
+        "name": packet.get("agent_name"),
+        "kind": "unknown",
+        "status": "unknown",
+        "execution": "unknown",
+        "remote_execution": False,
+        "summary": "Legacy packet without lane metadata.",
+    }
+    gate_run = packet.get("gate_run") or {
+        "status": packet.get("status", "unknown"),
+        "total": len(gates),
+        "completed": sum(1 for gate in gates if gate.get("status") not in {"pending", "skipped"}),
+        "pending": sum(1 for gate in gates if gate.get("status") == "pending"),
+        "skipped": sum(1 for gate in gates if gate.get("status") == "skipped"),
+        "simulated": sum(1 for gate in gates if gate.get("status") == "simulated"),
+        "warnings": sum(1 for gate in gates if gate.get("status") == "warn"),
+        "blocked": sum(1 for gate in gates if gate.get("status") == "block"),
+        "blocked_gate_ids": [gate.get("id") for gate in gates if gate.get("status") == "block"],
+        "next_action": "Review packet details.",
+    }
     task = packet.get("task", "")
     return {
         "packet_id": packet.get("packet_id"),
         "created_at": packet.get("created_at"),
         "agent_id": packet.get("agent_id"),
         "agent_name": packet.get("agent_name"),
+        "lane": lane,
         "stage": packet.get("stage"),
         "status": packet.get("status"),
         "attach_evidence": packet.get("attach_evidence", False),
+        "gate_run": gate_run,
         "memory_status": memory_gate.get("status", "unknown"),
         "memory_mode": memory_gate.get("mode", "unknown"),
         "evidence_status": evidence_gate.get("status", "unknown"),

@@ -140,6 +140,20 @@ function renderRecentPackets(data) {
     return;
   }
   data.recent_packets.forEach((packet) => {
+    const lane = packet.lane || {
+      name: packet.agent_name || "Unknown lane",
+      status: "unknown",
+      execution: "unknown",
+      remote_execution: false,
+    };
+    const gateRun = packet.gate_run || {
+      status: packet.status || "unknown",
+      completed: 0,
+      total: 0,
+      blocked: 0,
+      simulated: 0,
+      next_action: "Review packet details.",
+    };
     const memoryStatus = packet.memory_status || "unknown";
     const memoryMode = packet.memory_mode || "unknown";
     const evidenceStatus = packet.evidence_status || "unknown";
@@ -147,13 +161,19 @@ function renderRecentPackets(data) {
     row.className = "packet";
     const body = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = `${packet.agent_name} -> ${packet.stage}`;
+    title.textContent = `${lane.name} -> ${packet.stage}`;
     const detail = document.createElement("p");
     detail.textContent = packet.task_excerpt;
     const meta = document.createElement("p");
-    meta.textContent = `Memory: ${memoryStatus} (${memoryMode}). Evidence: ${evidenceStatus}. Packet: ${packet.packet_id}`;
-    body.append(title, detail, meta);
-    row.append(body, pill(packet.status));
+    const remote = lane.remote_execution ? "remote" : "local-only";
+    meta.textContent = `Lane: ${lane.status} (${lane.execution}, ${remote}). Gates: ${gateRun.completed}/${gateRun.total}, blocked ${gateRun.blocked}, simulated ${gateRun.simulated}.`;
+    const proof = document.createElement("p");
+    proof.textContent = `Memory: ${memoryStatus} (${memoryMode}). Evidence: ${evidenceStatus}. Packet: ${packet.packet_id}`;
+    const next = document.createElement("p");
+    next.className = "packet-next";
+    next.textContent = gateRun.next_action;
+    body.append(title, detail, meta, proof, next);
+    row.append(body, pill(gateRun.status || packet.status));
     list.appendChild(row);
   });
 }
