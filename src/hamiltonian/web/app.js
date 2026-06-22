@@ -154,6 +154,14 @@ function renderRecentPackets(data) {
       simulated: 0,
       next_action: "Review packet details.",
     };
+    const executionBoundary = packet.execution_boundary || {
+      status: "unknown",
+      mode: "legacy",
+      approval_required: true,
+      local_execution: false,
+      remote_execution: false,
+      next_action: "Review packet details.",
+    };
     const memoryStatus = packet.memory_status || "unknown";
     const memoryMode = packet.memory_mode || "unknown";
     const evidenceStatus = packet.evidence_status || "unknown";
@@ -167,12 +175,16 @@ function renderRecentPackets(data) {
     const meta = document.createElement("p");
     const remote = lane.remote_execution ? "remote" : "local-only";
     meta.textContent = `Lane: ${lane.status} (${lane.execution}, ${remote}). Gates: ${gateRun.completed}/${gateRun.total}, blocked ${gateRun.blocked}, simulated ${gateRun.simulated}.`;
+    const execution = document.createElement("p");
+    const localExec = executionBoundary.local_execution ? "local execution armed" : "local execution off";
+    const remoteExec = executionBoundary.remote_execution ? "remote execution armed" : "remote execution off";
+    execution.textContent = `Execute: ${executionBoundary.status} (${executionBoundary.mode}). ${localExec}; ${remoteExec}.`;
     const proof = document.createElement("p");
     proof.textContent = `Memory: ${memoryStatus} (${memoryMode}). Evidence: ${evidenceStatus}. Packet: ${packet.packet_id}`;
     const next = document.createElement("p");
     next.className = "packet-next";
-    next.textContent = gateRun.next_action;
-    body.append(title, detail, meta, proof, next);
+    next.textContent = executionBoundary.next_action || gateRun.next_action;
+    body.append(title, detail, meta, execution, proof, next);
     row.append(body, pill(gateRun.status || packet.status));
     list.appendChild(row);
   });
@@ -203,15 +215,21 @@ function renderPacket() {
   const preview = $("#packet-preview");
   const task = $("#task-input").value.trim() || "No task written.";
   const agent = $("#agent-select").selectedOptions[0]?.textContent || "No agent";
-  const evidence = state.packetMode === "record" ? "Evidence packet requested." : "Evidence optional.";
+  const modeCopy = {
+    draft: "Draft only.",
+    gate: "Gates will run.",
+    execute: "Execution boundary will be prepared without running.",
+    record: "Evidence packet requested.",
+  };
+  const detail = modeCopy[state.packetMode] || "Evidence optional.";
   preview.innerHTML = "";
   const strong = document.createElement("strong");
   strong.textContent = `${state.packetMode.toUpperCase()} packet`;
   const body = document.createElement("span");
   if (state.lastPacket) {
-    body.textContent = ` ${agent}: ${state.lastPacket.status}. ${evidence} Saved as ${state.lastPacket.packet_id}.`;
+    body.textContent = ` ${agent}: ${state.lastPacket.status}. ${detail} Saved as ${state.lastPacket.packet_id}.`;
   } else {
-    body.textContent = ` ${agent}: ${task} ${evidence}`;
+    body.textContent = ` ${agent}: ${task} ${detail}`;
   }
   preview.append(strong, body);
 }
@@ -280,6 +298,12 @@ $("#draft-button").addEventListener("click", () => {
 
 $("#gate-button").addEventListener("click", () => {
   submitPacket("gate").catch((error) => {
+    $("#packet-preview").textContent = error.message;
+  });
+});
+
+$("#execute-button").addEventListener("click", () => {
+  submitPacket("execute").catch((error) => {
     $("#packet-preview").textContent = error.message;
   });
 });

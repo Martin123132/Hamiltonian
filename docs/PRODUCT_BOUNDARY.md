@@ -66,6 +66,7 @@ capture:
 - the lane assignment and execution boundary
 - gate decisions and fallback reasons
 - the gate-run status and next operator action
+- the execution boundary and approval requirement
 - handoff state
 - optional evidence references
 

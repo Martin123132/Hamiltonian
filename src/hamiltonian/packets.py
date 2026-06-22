@@ -36,7 +36,7 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
 }
 AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATALOG.items()}
 
-STAGES = {"draft", "gate", "record"}
+STAGES = {"draft", "gate", "execute", "record"}
 DANGEROUS_MARKERS = (
     "rm -rf",
     "remove-item",
@@ -85,6 +85,17 @@ class GateRunSummary:
 
 
 @dataclass(frozen=True)
+class ExecutionBoundary:
+    status: str
+    mode: str
+    approval_required: bool
+    local_execution: bool
+    remote_execution: bool
+    summary: str
+    next_action: str
+
+
+@dataclass(frozen=True)
 class TaskPacket:
     packet_id: str
     created_at: str
@@ -98,6 +109,7 @@ class TaskPacket:
     attach_evidence: bool
     gates: list[GateResult]
     gate_run: GateRunSummary
+    execution_boundary: ExecutionBoundary
     packet_dir: str
     files: dict[str, str]
 
@@ -203,6 +215,9 @@ def _gate_run_summary(stage: str, gates: list[GateResult], attach_evidence: bool
     elif warnings:
         status = "needs-review"
         next_action = "Review warnings, then keep work bounded before execution."
+    elif stage == "execute":
+        status = "execution-ready"
+        next_action = "Operator approval is required before any future runner can execute this packet."
     elif attach_evidence:
         status = "evidence-attached"
         next_action = "Ready for operator review with local evidence represented; execution remains manual."
@@ -221,6 +236,66 @@ def _gate_run_summary(stage: str, gates: list[GateResult], attach_evidence: bool
         blocked=blocked,
         blocked_gate_ids=blocked_gate_ids,
         next_action=next_action,
+    )
+
+
+def _execution_boundary(
+    stage: str,
+    lane: LaneAssignment,
+    gate_run: GateRunSummary,
+) -> ExecutionBoundary:
+    if stage == "draft":
+        return ExecutionBoundary(
+            status="not-prepared",
+            mode="draft",
+            approval_required=True,
+            local_execution=False,
+            remote_execution=False,
+            summary="Draft saved; execution boundary has not been prepared.",
+            next_action="Run Gate plan before preparing execution.",
+        )
+
+    if stage in {"gate", "record"}:
+        return ExecutionBoundary(
+            status="not-prepared",
+            mode="gated-only",
+            approval_required=True,
+            local_execution=False,
+            remote_execution=False,
+            summary="Packet was gated without arming an execution boundary.",
+            next_action="Use Prepare execute to create a dry-run approval boundary.",
+        )
+
+    if gate_run.blocked:
+        return ExecutionBoundary(
+            status="blocked",
+            mode="manual-approval",
+            approval_required=True,
+            local_execution=False,
+            remote_execution=False,
+            summary="Execution boundary refused because one or more gates blocked the packet.",
+            next_action="Clear blocked gates before preparing execution.",
+        )
+
+    if gate_run.warnings:
+        return ExecutionBoundary(
+            status="needs-review",
+            mode="manual-approval",
+            approval_required=True,
+            local_execution=False,
+            remote_execution=False,
+            summary="Execution boundary is paused for operator review because gates emitted warnings.",
+            next_action="Review warnings before any future runner can execute this packet.",
+        )
+
+    return ExecutionBoundary(
+        status="awaiting-approval",
+        mode="dry-run",
+        approval_required=True,
+        local_execution=False,
+        remote_execution=False,
+        summary=f"{lane.name} is prepared behind Hamiltonian gates; no agent or command executed.",
+        next_action="Operator approval is required before a future bounded runner slice can execute.",
     )
 
 
@@ -345,6 +420,8 @@ def _packet_status(stage: str, gates: list[GateResult], attach_evidence: bool) -
         return "blocked"
     if stage == "draft":
         return "drafted"
+    if stage == "execute":
+        return "execution-ready"
     if attach_evidence:
         return "recorded"
     return "gated"
@@ -362,6 +439,7 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         f"- Stage: `{packet.stage}`",
         f"- Status: **{packet.status.upper()}**",
         f"- Evidence requested: `{packet.attach_evidence}`",
+        f"- Execution boundary: `{packet.execution_boundary.status}`",
         "",
         "## Task",
         "",
@@ -388,6 +466,16 @@ def build_packet_markdown(packet: TaskPacket) -> str:
             f"- Completed: `{packet.gate_run.completed}/{packet.gate_run.total}`",
             f"- Blocked gates: `{', '.join(packet.gate_run.blocked_gate_ids) or 'none'}`",
             f"- Next action: {packet.gate_run.next_action}",
+            "",
+            "## Execution Boundary",
+            "",
+            f"- Status: `{packet.execution_boundary.status}`",
+            f"- Mode: `{packet.execution_boundary.mode}`",
+            f"- Approval required: `{packet.execution_boundary.approval_required}`",
+            f"- Local execution: `{packet.execution_boundary.local_execution}`",
+            f"- Remote execution: `{packet.execution_boundary.remote_execution}`",
+            f"- Summary: {packet.execution_boundary.summary}",
+            f"- Next action: {packet.execution_boundary.next_action}",
         ]
     )
     lines.extend(
@@ -431,7 +519,9 @@ def create_task_packet(
         if normalized_stage == "draft"
         else _run_gates(repo, clean_task, evidence_requested, integrations, packet_dir)
     )
+    lane = _lane_assignment(normalized_agent, normalized_stage)
     gate_run = _gate_run_summary(normalized_stage, gates, evidence_requested)
+    execution_boundary = _execution_boundary(normalized_stage, lane, gate_run)
     packet_json = packet_dir / "task-packet.json"
     packet_md = packet_dir / "task-packet.md"
     packet = TaskPacket(
@@ -440,13 +530,14 @@ def create_task_packet(
         repo=str(repo),
         agent_id=normalized_agent,
         agent_name=AGENTS[normalized_agent],
-        lane=_lane_assignment(normalized_agent, normalized_stage),
+        lane=lane,
         task=clean_task,
         stage=normalized_stage,
         status=_packet_status(normalized_stage, gates, evidence_requested),
         attach_evidence=evidence_requested,
         gates=gates,
         gate_run=gate_run,
+        execution_boundary=execution_boundary,
         packet_dir=str(packet_dir),
         files={
             "json": str(packet_json),
@@ -487,6 +578,15 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "blocked_gate_ids": [gate.get("id") for gate in gates if gate.get("status") == "block"],
         "next_action": "Review packet details.",
     }
+    execution_boundary = packet.get("execution_boundary") or {
+        "status": "unknown",
+        "mode": "legacy",
+        "approval_required": True,
+        "local_execution": False,
+        "remote_execution": False,
+        "summary": "Legacy packet without execution-boundary metadata.",
+        "next_action": "Review packet details.",
+    }
     task = packet.get("task", "")
     return {
         "packet_id": packet.get("packet_id"),
@@ -498,6 +598,7 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "status": packet.get("status"),
         "attach_evidence": packet.get("attach_evidence", False),
         "gate_run": gate_run,
+        "execution_boundary": execution_boundary,
         "memory_status": memory_gate.get("status", "unknown"),
         "memory_mode": memory_gate.get("mode", "unknown"),
         "evidence_status": evidence_gate.get("status", "unknown"),
