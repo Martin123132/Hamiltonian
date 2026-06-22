@@ -51,6 +51,55 @@ only sanitized local metadata: counts, extension mix, git availability, and
 privacy flags. It does not read file contents, store private path names, call
 remote services, or execute RepoMori.
 
+## Product Contract
+
+Hamiltonian owns the operator cockpit and runtime boundary above agents. Its
+core job is to turn an operator's intent into a local task packet, assign that
+packet to an adapter lane, run memory/safety/cost/evidence gates, and make the
+state visible enough that the operator can decide what happens next.
+
+The durable unit of work is the task packet, not the transcript. Packets should
+capture:
+
+- the operator task
+- the selected lane or adapter
+- gate decisions and fallback reasons
+- handoff state
+- optional evidence references
+
+Evidence can enrich a packet, but evidence is not the product boundary.
+
+## Non-Goals
+
+Hamiltonian should not become:
+
+- a clone of AgentLedger or any other flight recorder
+- a single-agent client for OpenClaw, Hermes, Codex, or one preferred runner
+- a remote execution service
+- a repo scraper that stores private source text by default
+- a public telemetry collector
+- a framework that requires every optional tool before it can start
+
+If a feature mainly records what happened, it belongs behind the optional
+evidence boundary. If a feature routes, gates, budgets, verifies, or hands off
+agent work, it belongs in Hamiltonian.
+
+## Adapter Contract
+
+Every adapter lane should follow the same local-first contract:
+
+1. Detect whether the tool is available.
+2. Return a structured status when unavailable.
+3. Use sanitized fallback data when useful.
+4. Avoid remote calls unless the operator explicitly configures that adapter.
+5. Avoid reading or storing private file contents unless a later mode asks for
+   it clearly.
+6. Keep credentials out of packets, logs, docs, screenshots, and demos.
+
+The first proof adapter is RepoMori memory. The next adapters should prove the
+same boundary for command safety, cost posture, compression, release gates, and
+agent lanes.
+
 ## Package Shape
 
 Recommended package/repo:

@@ -26,6 +26,16 @@ evidence, and release checks.
 Hamiltonian can call AgentLedger when the user wants flight-recorder evidence,
 but it does not require AgentLedger as the product home.
 
+Hamiltonian's core unit is the task packet: task intent, selected lane, local
+gate results, handoff state, and optional evidence references. If a feature
+mainly records a run, it belongs behind the AgentLedger evidence boundary. If it
+routes, gates, budgets, verifies, or hands off work across agents, it belongs in
+Hamiltonian.
+
+Hamiltonian is not a remote execution service and not a repo scraper. Prototype
+adapters stay local, degrade safely when missing, and write sanitized metadata
+unless a later operator mode explicitly asks for more.
+
 ## Run
 
 ```powershell
