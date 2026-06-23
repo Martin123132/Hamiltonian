@@ -79,8 +79,9 @@ The packet index is a local manifest/cache for recent packet summaries. It is
 not a remote telemetry feed and should be rebuilt from packet files if missing
 or invalid.
 
-CLI packet commands should read and write the same local packet store as the
-cockpit, without adding remote execution, telemetry, or publication behavior.
+CLI packet commands should create, read, and write the same local packet store
+as the cockpit, without adding remote execution, telemetry, or publication
+behavior.
 
 Packet exports are local handoff briefs. They should be sanitized, regenerated
 inside the packet directory, and treated as operator notes rather than public
@@ -132,6 +133,8 @@ hamiltonian cockpit --repo .
 hamiltonian doctor --repo .
 hamiltonian run --repo . -- <command>
 hamiltonian run --repo . --runner agentledger -- <command>
+hamiltonian packets --repo . create --task "Draft a local packet"
+hamiltonian packets --repo . list
 ```
 
 Recommended first app surface:

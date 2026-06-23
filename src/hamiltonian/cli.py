@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
 
 from .core import control_run, doctor
-from .packets import export_handoff_markdown, get_task_packet, list_task_packets
+from .packets import (
+    AGENTS,
+    STAGES,
+    create_task_packet,
+    export_handoff_markdown,
+    get_task_packet,
+    list_task_packets,
+)
 from .server import run_cockpit
 
 
@@ -46,6 +54,29 @@ def build_parser() -> argparse.ArgumentParser:
     packets_p = sub.add_parser("packets", help="inspect local task packets")
     packets_p.add_argument("--repo", default=".", help="repository/workspace path")
     packets_sub = packets_p.add_subparsers(dest="packets_command", required=True)
+
+    packets_create_p = packets_sub.add_parser("create", help="create a local task packet")
+    packets_create_p.add_argument("--task", required=True, help="operator task text")
+    packets_create_p.add_argument(
+        "--agent",
+        "--agent-id",
+        dest="agent_id",
+        choices=sorted(AGENTS),
+        default="codex",
+        help="agent lane to assign",
+    )
+    packets_create_p.add_argument(
+        "--stage",
+        choices=sorted(STAGES),
+        default="draft",
+        help="packet lifecycle stage",
+    )
+    packets_create_p.add_argument(
+        "--attach-evidence",
+        action="store_true",
+        help="represent optional AgentLedger evidence without executing agents",
+    )
+    packets_create_p.add_argument("--json", action="store_true", help="print JSON")
 
     packets_list_p = packets_sub.add_parser("list", help="list recent task packets")
     packets_list_p.add_argument("--limit", type=int, default=8, help="maximum packets to show")
@@ -132,6 +163,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command_name == "packets":
         try:
+            if args.packets_command == "create":
+                packet = create_task_packet(
+                    repo_path=Path(args.repo),
+                    task=args.task,
+                    agent_id=args.agent_id,
+                    stage=args.stage,
+                    attach_evidence=args.attach_evidence,
+                )
+                packet_data = asdict(packet)
+                if args.json:
+                    print(json.dumps({"packet": packet_data}, indent=2))
+                else:
+                    print_packet_summary(packet_data)
+                return 0
+
             if args.packets_command == "list":
                 packets = list_task_packets(Path(args.repo), limit=args.limit)
                 if args.json:
