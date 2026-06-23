@@ -45,6 +45,9 @@ python .\scripts\run-cockpit.py --repo .
 hamiltonian doctor --repo .
 hamiltonian run --repo . -- python -c "print('hello Hamiltonian')"
 hamiltonian run --repo . --runner agentledger -- python -m pytest
+hamiltonian packets --repo . list
+hamiltonian packets --repo . detail <packet-id>
+hamiltonian packets --repo . export <packet-id>
 ```
 
 The cockpit starts a local web app at:
@@ -88,6 +91,9 @@ repo-local task packet store.
 
 Recent packet listings use `.hamiltonian/tasks/index.json` first and rebuild it
 from packet files when the index is missing or invalid.
+
+The same packet list, detail, and sanitized export surfaces are available from
+the CLI through `hamiltonian packets`.
 
 Packet detail can export a sanitized handoff markdown file to:
 

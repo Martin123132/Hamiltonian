@@ -79,6 +79,9 @@ The packet index is a local manifest/cache for recent packet summaries. It is
 not a remote telemetry feed and should be rebuilt from packet files if missing
 or invalid.
 
+CLI packet commands should read and write the same local packet store as the
+cockpit, without adding remote execution, telemetry, or publication behavior.
+
 Packet exports are local handoff briefs. They should be sanitized, regenerated
 inside the packet directory, and treated as operator notes rather than public
 release material.
