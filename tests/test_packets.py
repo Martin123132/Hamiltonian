@@ -8,7 +8,12 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from hamiltonian.packets import create_task_packet, get_task_packet, list_task_packets
+from hamiltonian.packets import (
+    create_task_packet,
+    export_handoff_markdown,
+    get_task_packet,
+    list_task_packets,
+)
 from hamiltonian.runtime import runtime_state_dict
 from hamiltonian.server import CockpitHandler
 
@@ -173,6 +178,32 @@ def test_packet_detail_loader_returns_full_packet_safely(tmp_path: Path) -> None
         get_task_packet(tmp_path, "../secret")
     with pytest.raises(FileNotFoundError):
         get_task_packet(tmp_path, "missing-packet")
+
+
+def test_handoff_export_writes_sanitized_markdown(tmp_path: Path) -> None:
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Prepare handoff with TOKEN=supersecret from D:\\Private\\Project\\.env and https://private.example.test/run.",
+        agent_id="codex",
+        stage="handoff",
+    )
+
+    result = export_handoff_markdown(tmp_path, packet.packet_id)
+    export_path = Path(result["export"]["path"])
+    export_text = export_path.read_text(encoding="utf-8")
+    loaded = get_task_packet(tmp_path, packet.packet_id)
+
+    assert result["export"]["filename"] == "handoff-export.md"
+    assert result["export"]["sanitized"] is True
+    assert export_path.parent == Path(packet.packet_dir)
+    assert loaded["exports"]["handoff_markdown"]["filename"] == "handoff-export.md"
+    assert "supersecret" not in export_text
+    assert "D:\\Private" not in export_text
+    assert ".env" not in export_text.lower()
+    assert "https://private.example.test" not in export_text
+    assert str(tmp_path) not in export_text
+    assert "artifact_path" not in export_text
+    assert "packet_dir" not in export_text
 
 
 def test_record_packet_represents_evidence_only_when_selected(tmp_path: Path) -> None:
@@ -351,6 +382,21 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert handoff_state["recent_packets"][0]["packet_id"] == handoff_created["packet"]["packet_id"]
         assert handoff_state["recent_packets"][0]["stage"] == "handoff"
         assert handoff_state["recent_packets"][0]["handoff"]["status"] == "ready"
+
+        export_request = Request(
+            f"{base_url}/api/packets/{handoff_created['packet']['packet_id']}/export?{query}",
+            data=b"",
+            method="POST",
+        )
+        with urlopen(export_request, timeout=10) as response:
+            export_created = json.loads(response.read().decode("utf-8"))
+
+        export_path = Path(export_created["export"]["path"])
+        export_text = export_path.read_text(encoding="utf-8")
+        assert export_created["export"]["filename"] == "handoff-export.md"
+        assert export_created["packet"]["exports"]["handoff_markdown"]["sanitized"] is True
+        assert export_path.exists()
+        assert str(tmp_path) not in export_text
     finally:
         server.shutdown()
         server.server_close()
@@ -367,6 +413,9 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function renderPacketDetail" in app
     assert "loadPacketDetail(packet.packet_id)" in app
     assert "fetch(`/api/packets/${encodeURIComponent(packetId)}?${params.toString()}`)" in app
+    assert 'id="packet-export-button"' in html
+    assert "function exportSelectedPacket" in app
+    assert "fetch(`/api/packets/${encodeURIComponent(packetId)}/export?${params.toString()}`" in app
     assert "Memory: ${memoryStatus}" in app
     assert "Lane: ${lane.status}" in app
     assert "Gates: ${gateRun.completed}/${gateRun.total}" in app

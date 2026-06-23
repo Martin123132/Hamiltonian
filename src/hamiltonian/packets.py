@@ -39,6 +39,13 @@ AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATA
 
 STAGES = {"draft", "gate", "execute", "handoff", "record"}
 PACKET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+ABSOLUTE_PATH_PATTERN = re.compile(r"(?i)\b[A-Z]:[\\/][^\s`'\"<>]+")
+SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*[^,\s]+"
+)
+SECRET_VALUE_PATTERN = re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}\b")
+ENV_FILE_PATTERN = re.compile(r"(?i)\.env(?:\.[A-Za-z0-9_-]+)?")
+REMOTE_URL_PATTERN = re.compile(r"(?i)\bhttps?://[^\s`'\"<>]+")
 DANGEROUS_MARKERS = (
     "rm -rf",
     "remove-item",
@@ -684,6 +691,129 @@ def get_task_packet(repo_path: Path, packet_id: str) -> dict[str, Any]:
     if not packet_json.exists():
         raise FileNotFoundError("packet not found")
     return load_task_packet(packet_json)
+
+
+def _sanitize_handoff_text(value: Any) -> str:
+    text = str(value or "")
+    text = ABSOLUTE_PATH_PATTERN.sub("[redacted-path]", text)
+    text = REMOTE_URL_PATTERN.sub("[redacted-url]", text)
+    text = SECRET_ASSIGNMENT_PATTERN.sub(lambda match: f"{match.group(1)}=[redacted-secret]", text)
+    text = SECRET_VALUE_PATTERN.sub("[redacted-secret]", text)
+    text = ENV_FILE_PATTERN.sub("[redacted-env-file]", text)
+    return text
+
+
+def _packet_json_path(repo: Path, packet_id: str) -> Path:
+    root = tasks_root(repo).resolve()
+    packet_json = (root / packet_id / "task-packet.json").resolve()
+    if root not in packet_json.parents:
+        raise ValueError("packet id resolved outside task storage")
+    return packet_json
+
+
+def build_sanitized_handoff_export(packet: dict[str, Any], exported_at: str) -> str:
+    lane = packet.get("lane", {})
+    gate_run = packet.get("gate_run", {})
+    execution = packet.get("execution_boundary", {})
+    handoff = packet.get("handoff", {})
+    gates = packet.get("gates", [])
+    evidence_gate = next((gate for gate in gates if gate.get("id") == "evidence"), {})
+    blocked_ids = gate_run.get("blocked_gate_ids") or []
+
+    lines = [
+        "# Hamiltonian Handoff Export",
+        "",
+        f"- Packet: `{_sanitize_handoff_text(packet.get('packet_id'))}`",
+        f"- Exported: `{_sanitize_handoff_text(exported_at)}`",
+        f"- Stage: `{_sanitize_handoff_text(packet.get('stage'))}`",
+        f"- Status: `{_sanitize_handoff_text(packet.get('status'))}`",
+        f"- Agent: `{_sanitize_handoff_text(packet.get('agent_name'))}`",
+        f"- Lane: `{_sanitize_handoff_text(lane.get('status'))}` / `{_sanitize_handoff_text(lane.get('execution'))}`",
+        f"- Remote execution: `{bool(execution.get('remote_execution') or lane.get('remote_execution'))}`",
+        f"- Evidence: `{_sanitize_handoff_text(evidence_gate.get('status', 'unknown'))}`",
+        "",
+        "## Task",
+        "",
+        _sanitize_handoff_text(packet.get("task")),
+        "",
+        "## Gate Run",
+        "",
+        f"- Status: `{_sanitize_handoff_text(gate_run.get('status'))}`",
+        f"- Completed: `{gate_run.get('completed', 0)}/{gate_run.get('total', 0)}`",
+        f"- Blocked gates: `{_sanitize_handoff_text(', '.join(blocked_ids) or 'none')}`",
+        f"- Next action: {_sanitize_handoff_text(gate_run.get('next_action'))}",
+        "",
+        "## Execution Boundary",
+        "",
+        f"- Status: `{_sanitize_handoff_text(execution.get('status'))}`",
+        f"- Mode: `{_sanitize_handoff_text(execution.get('mode'))}`",
+        f"- Approval required: `{bool(execution.get('approval_required', True))}`",
+        f"- Local execution: `{bool(execution.get('local_execution'))}`",
+        f"- Remote execution: `{bool(execution.get('remote_execution'))}`",
+        f"- Summary: {_sanitize_handoff_text(execution.get('summary'))}",
+        f"- Next action: {_sanitize_handoff_text(execution.get('next_action'))}",
+        "",
+        "## Handoff",
+        "",
+        f"- Status: `{_sanitize_handoff_text(handoff.get('status'))}`",
+        f"- Ready: `{bool(handoff.get('ready'))}`",
+        f"- Lane: `{_sanitize_handoff_text(handoff.get('lane'))}`",
+        f"- Gate status: `{_sanitize_handoff_text(handoff.get('gate_status'))}`",
+        f"- Execution status: `{_sanitize_handoff_text(handoff.get('execution_status'))}`",
+        f"- Evidence status: `{_sanitize_handoff_text(handoff.get('evidence_status'))}`",
+        f"- Includes evidence: `{bool(handoff.get('includes_evidence'))}`",
+        f"- Summary: {_sanitize_handoff_text(handoff.get('summary'))}",
+        f"- Next action: {_sanitize_handoff_text(handoff.get('next_action'))}",
+        "",
+        "## Gates",
+    ]
+    for gate in gates:
+        lines.append(
+            "- "
+            f"{_sanitize_handoff_text(gate.get('name'))}: "
+            f"{_sanitize_handoff_text(gate.get('status'))} "
+            f"({_sanitize_handoff_text(gate.get('mode'))}). "
+            f"{_sanitize_handoff_text(gate.get('summary'))}"
+        )
+    lines.extend(
+        [
+            "",
+            "## Sanitization",
+            "",
+            "This export omits repo paths, packet storage paths, artifact paths, file contents, credentials, and remote URLs.",
+            "It is a local operator handoff brief, not a publication artifact.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def export_handoff_markdown(repo_path: Path, packet_id: str) -> dict[str, Any]:
+    repo = ensure_repo(repo_path)
+    clean_id = packet_id.strip()
+    packet = get_task_packet(repo, clean_id)
+    packet_json = _packet_json_path(repo, clean_id)
+    packet_dir = packet_json.parent
+    export_path = (packet_dir / "handoff-export.md").resolve()
+    if packet_dir not in export_path.parents:
+        raise ValueError("export path resolved outside packet directory")
+
+    exported_at = datetime.now(timezone.utc).isoformat()
+    export_text = build_sanitized_handoff_export(packet, exported_at)
+    write_text(export_path, export_text)
+
+    export_record = {
+        "kind": "sanitized-handoff-markdown",
+        "filename": export_path.name,
+        "path": str(export_path),
+        "exported_at": exported_at,
+        "sanitized": True,
+        "local_only": True,
+    }
+    packet.setdefault("files", {})["handoff_export"] = str(export_path)
+    packet.setdefault("exports", {})["handoff_markdown"] = export_record
+    write_text(packet_json, json.dumps(packet, indent=2))
+    return {"packet": packet, "export": export_record}
 
 
 def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:

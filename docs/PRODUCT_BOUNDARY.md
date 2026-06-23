@@ -75,6 +75,10 @@ Evidence can enrich a packet, but evidence is not the product boundary.
 Packet detail views should render from the local task packet store. They should
 not become arbitrary file browsers or expose private source content.
 
+Packet exports are local handoff briefs. They should be sanitized, regenerated
+inside the packet directory, and treated as operator notes rather than public
+release material.
+
 ## Non-Goals
 
 Hamiltonian should not become:

@@ -230,11 +230,13 @@ function renderPacketDetail(packet) {
   const title = $("#packet-detail-title");
   const status = $("#packet-detail-status");
   const detail = $("#packet-detail");
+  const exportButton = $("#packet-export-button");
   clear(detail);
 
   if (!packet) {
     title.textContent = "No packet selected";
     status.textContent = "Waiting";
+    exportButton.disabled = true;
     const empty = document.createElement("p");
     empty.className = "muted-line";
     empty.textContent = "No packet selected.";
@@ -246,11 +248,13 @@ function renderPacketDetail(packet) {
   const gateRun = packet.gate_run || {};
   const executionBoundary = packet.execution_boundary || {};
   const handoff = packet.handoff || {};
+  const handoffExport = packet.exports?.handoff_markdown || null;
   const gates = packet.gates || [];
   const evidenceGate = gates.find((gate) => gate.id === "evidence") || {};
 
   title.textContent = packet.packet_id || "Packet detail";
   status.textContent = packet.status || "unknown";
+  exportButton.disabled = false;
 
   const summary = document.createElement("div");
   summary.className = "detail-grid";
@@ -262,6 +266,7 @@ function renderPacketDetail(packet) {
     detailRow("Execution", `${executionBoundary.status || "unknown"} / ${executionBoundary.mode || "unknown"}`),
     detailRow("Handoff", `${handoff.status || "unknown"} / ${handoff.ready ? "ready" : "not ready"}`),
     detailRow("Evidence", evidenceGate.status || "unknown"),
+    detailRow("Export", handoffExport ? `${handoffExport.filename} / sanitized` : "none"),
     detailRow("Remote execution", String(Boolean(executionBoundary.remote_execution || lane.remote_execution)))
   );
 
@@ -378,6 +383,26 @@ async function loadPacketDetail(packetId) {
   renderPacketDetail(data.packet);
 }
 
+async function exportSelectedPacket() {
+  const packetId = state.selectedPacket?.packet_id;
+  if (!packetId) {
+    $("#packet-detail-status").textContent = "Select a packet first";
+    return;
+  }
+  const params = new URLSearchParams();
+  const repo = $("#repo-input").value || state.repo;
+  if (repo) params.set("repo", repo);
+  $("#packet-detail-status").textContent = "Exporting";
+  const response = await fetch(`/api/packets/${encodeURIComponent(packetId)}/export?${params.toString()}`, {
+    method: "POST",
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Packet export failed");
+  state.selectedPacket = data.packet;
+  renderPacketDetail(data.packet);
+  $("#packet-detail-status").textContent = `Exported ${data.export.filename}`;
+}
+
 async function submitPacket(stageName) {
   const task = $("#task-input").value.trim();
   if (!task) {
@@ -440,6 +465,12 @@ $("#handoff-button").addEventListener("click", () => {
 $("#record-button").addEventListener("click", () => {
   submitPacket("record").catch((error) => {
     $("#packet-preview").textContent = error.message;
+  });
+});
+
+$("#packet-export-button").addEventListener("click", () => {
+  exportSelectedPacket().catch((error) => {
+    $("#packet-detail-status").textContent = error.message;
   });
 });
 

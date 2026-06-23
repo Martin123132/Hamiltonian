@@ -85,6 +85,15 @@ The cockpit exposes recent packet summaries through `/api/packets` and full
 packet detail through `/api/packets/<packet-id>`. Detail reads stay inside the
 repo-local task packet store.
 
+Packet detail can export a sanitized handoff markdown file to:
+
+```text
+.hamiltonian/tasks/<packet-id>/handoff-export.md
+```
+
+The export omits repo paths, packet storage paths, artifact paths, file
+contents, credentials, and remote URLs.
+
 No remote agent execution happens in this prototype slice. Missing RepoMori,
 Jester, Tokometer, and AgentLedger integrations degrade to explicit local
 fallback gate results.

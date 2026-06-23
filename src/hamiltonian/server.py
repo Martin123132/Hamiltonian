@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .packets import create_task_packet, get_task_packet, list_task_packets
+from .packets import create_task_packet, export_handoff_markdown, get_task_packet, list_task_packets
 from .runtime import runtime_state_dict
 
 
@@ -57,6 +57,19 @@ class CockpitHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/packets/") and parsed.path.endswith("/export"):
+            query = parse_qs(parsed.query)
+            repo = Path(query.get("repo", [str(self.repo)])[0])
+            packet_id = unquote(parsed.path.removeprefix("/api/packets/").removesuffix("/export")).strip("/")
+            try:
+                self._write_json(export_handoff_markdown(repo, packet_id), status=HTTPStatus.CREATED)
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path != "/api/packets":
             self._write_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             return
