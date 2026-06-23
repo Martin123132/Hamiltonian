@@ -63,6 +63,7 @@ The cockpit now persists local task packets under:
   task-packet.md
   evidence/
     agentledger-placeholder.json
+.hamiltonian/tasks/index.json
 ```
 
 Each packet includes an explicit lane assignment and gate-run summary. The lane
@@ -84,6 +85,9 @@ The packet stages are:
 The cockpit exposes recent packet summaries through `/api/packets` and full
 packet detail through `/api/packets/<packet-id>`. Detail reads stay inside the
 repo-local task packet store.
+
+Recent packet listings use `.hamiltonian/tasks/index.json` first and rebuild it
+from packet files when the index is missing or invalid.
 
 Packet detail can export a sanitized handoff markdown file to:
 

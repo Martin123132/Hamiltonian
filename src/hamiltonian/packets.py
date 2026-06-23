@@ -37,6 +37,7 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
 }
 AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATALOG.items()}
 
+TASK_INDEX_SCHEMA = "hamiltonian.task-index.v1"
 STAGES = {"draft", "gate", "execute", "handoff", "record"}
 PACKET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 ABSOLUTE_PATH_PATTERN = re.compile(r"(?i)\b[A-Z]:[\\/][^\s`'\"<>]+")
@@ -140,6 +141,10 @@ class TaskPacket:
 
 def tasks_root(repo: Path) -> Path:
     return repo / ".hamiltonian" / "tasks"
+
+
+def task_index_path(repo: Path) -> Path:
+    return tasks_root(repo) / "index.json"
 
 
 def utc_packet_id() -> str:
@@ -671,6 +676,7 @@ def create_task_packet(
     )
     write_text(packet_json, json.dumps(asdict(packet), indent=2))
     write_text(packet_md, build_packet_markdown(packet))
+    write_task_index(repo)
     return packet
 
 
@@ -813,6 +819,7 @@ def export_handoff_markdown(repo_path: Path, packet_id: str) -> dict[str, Any]:
     packet.setdefault("files", {})["handoff_export"] = str(export_path)
     packet.setdefault("exports", {})["handoff_markdown"] = export_record
     write_text(packet_json, json.dumps(packet, indent=2))
+    write_task_index(repo)
     return {"packet": packet, "export": export_record}
 
 
@@ -863,6 +870,7 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "next_action": "Review packet details.",
     }
     task = packet.get("task", "")
+    handoff_export = (packet.get("exports") or {}).get("handoff_markdown") or {}
     return {
         "packet_id": packet.get("packet_id"),
         "created_at": packet.get("created_at"),
@@ -878,9 +886,74 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "memory_status": memory_gate.get("status", "unknown"),
         "memory_mode": memory_gate.get("mode", "unknown"),
         "evidence_status": evidence_gate.get("status", "unknown"),
+        "has_handoff_export": bool(handoff_export),
+        "handoff_export_filename": handoff_export.get("filename"),
         "task_excerpt": task if len(task) <= 140 else f"{task[:137]}...",
         "packet_dir": packet.get("packet_dir"),
     }
+
+
+def _index_packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
+    summary = packet_summary(packet)
+    summary.pop("packet_dir", None)
+    return summary
+
+
+def _scan_task_packets(repo: Path) -> list[dict[str, Any]]:
+    root = tasks_root(repo)
+    if not root.exists():
+        return []
+    packets: list[dict[str, Any]] = []
+    for packet_json in root.glob("*/task-packet.json"):
+        try:
+            packets.append(_index_packet_summary(load_task_packet(packet_json)))
+        except (OSError, json.JSONDecodeError):
+            continue
+    packets.sort(
+        key=lambda packet: (
+            str(packet.get("created_at") or ""),
+            str(packet.get("packet_id") or ""),
+        ),
+        reverse=True,
+    )
+    return packets
+
+
+def build_task_index(repo_path: Path) -> dict[str, Any]:
+    repo = ensure_repo(repo_path)
+    packets = _scan_task_packets(repo)
+    return {
+        "schema": TASK_INDEX_SCHEMA,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "packet_count": len(packets),
+        "packets": packets,
+    }
+
+
+def write_task_index(repo_path: Path) -> dict[str, Any]:
+    repo = ensure_repo(repo_path)
+    root = tasks_root(repo)
+    root.mkdir(parents=True, exist_ok=True)
+    index = build_task_index(repo)
+    write_text(task_index_path(repo), json.dumps(index, indent=2))
+    return index
+
+
+def read_task_index(repo_path: Path) -> dict[str, Any] | None:
+    repo = ensure_repo(repo_path)
+    index_path = task_index_path(repo)
+    if not index_path.exists():
+        return None
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if index.get("schema") != TASK_INDEX_SCHEMA:
+        return None
+    packets = index.get("packets")
+    if not isinstance(packets, list):
+        return None
+    return index
 
 
 def list_task_packets(repo_path: Path, limit: int = 8) -> list[dict[str, Any]]:
@@ -888,12 +961,7 @@ def list_task_packets(repo_path: Path, limit: int = 8) -> list[dict[str, Any]]:
     root = tasks_root(repo)
     if not root.exists():
         return []
-    packets: list[dict[str, Any]] = []
-    for packet_json in sorted(root.glob("*/task-packet.json"), reverse=True):
-        try:
-            packets.append(packet_summary(load_task_packet(packet_json)))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if len(packets) >= limit:
-            break
-    return packets
+    index = read_task_index(repo)
+    if index is None:
+        index = write_task_index(repo)
+    return list(index.get("packets", []))[:limit]

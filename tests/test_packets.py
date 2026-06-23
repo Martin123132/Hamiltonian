@@ -9,10 +9,13 @@ from urllib.request import Request, urlopen
 import pytest
 
 from hamiltonian.packets import (
+    TASK_INDEX_SCHEMA,
     create_task_packet,
     export_handoff_markdown,
     get_task_packet,
     list_task_packets,
+    read_task_index,
+    task_index_path,
 )
 from hamiltonian.runtime import runtime_state_dict
 from hamiltonian.server import CockpitHandler
@@ -180,6 +183,40 @@ def test_packet_detail_loader_returns_full_packet_safely(tmp_path: Path) -> None
         get_task_packet(tmp_path, "missing-packet")
 
 
+def test_task_index_manifest_tracks_recent_packets_and_recovers(tmp_path: Path) -> None:
+    first = create_task_packet(
+        repo_path=tmp_path,
+        task="Draft the first packet.",
+        agent_id="codex",
+        stage="draft",
+    )
+    second = create_task_packet(
+        repo_path=tmp_path,
+        task="Prepare the second packet for handoff.",
+        agent_id="local",
+        stage="handoff",
+    )
+
+    index_path = task_index_path(tmp_path)
+    index = read_task_index(tmp_path)
+    assert index_path.exists()
+    assert index is not None
+    assert index["schema"] == TASK_INDEX_SCHEMA
+    assert index["packet_count"] == 2
+    assert index["packets"][0]["packet_id"] == second.packet_id
+    assert index["packets"][1]["packet_id"] == first.packet_id
+    assert "packet_dir" not in index["packets"][0]
+    assert list_task_packets(tmp_path, limit=1)[0]["packet_id"] == second.packet_id
+
+    index_path.write_text("{broken", encoding="utf-8")
+    rebuilt = list_task_packets(tmp_path)
+    recovered = read_task_index(tmp_path)
+    assert rebuilt[0]["packet_id"] == second.packet_id
+    assert recovered is not None
+    assert recovered["schema"] == TASK_INDEX_SCHEMA
+    assert recovered["packet_count"] == 2
+
+
 def test_handoff_export_writes_sanitized_markdown(tmp_path: Path) -> None:
     packet = create_task_packet(
         repo_path=tmp_path,
@@ -192,6 +229,7 @@ def test_handoff_export_writes_sanitized_markdown(tmp_path: Path) -> None:
     export_path = Path(result["export"]["path"])
     export_text = export_path.read_text(encoding="utf-8")
     loaded = get_task_packet(tmp_path, packet.packet_id)
+    index = read_task_index(tmp_path)
 
     assert result["export"]["filename"] == "handoff-export.md"
     assert result["export"]["sanitized"] is True
@@ -204,6 +242,9 @@ def test_handoff_export_writes_sanitized_markdown(tmp_path: Path) -> None:
     assert str(tmp_path) not in export_text
     assert "artifact_path" not in export_text
     assert "packet_dir" not in export_text
+    assert index is not None
+    assert index["packets"][0]["has_handoff_export"] is True
+    assert index["packets"][0]["handoff_export_filename"] == "handoff-export.md"
 
 
 def test_record_packet_represents_evidence_only_when_selected(tmp_path: Path) -> None:
