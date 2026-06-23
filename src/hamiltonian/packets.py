@@ -36,7 +36,7 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
 }
 AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATALOG.items()}
 
-STAGES = {"draft", "gate", "execute", "record"}
+STAGES = {"draft", "gate", "execute", "handoff", "record"}
 DANGEROUS_MARKERS = (
     "rm -rf",
     "remove-item",
@@ -96,6 +96,20 @@ class ExecutionBoundary:
 
 
 @dataclass(frozen=True)
+class HandoffSummary:
+    status: str
+    mode: str
+    ready: bool
+    lane: str
+    gate_status: str
+    execution_status: str
+    evidence_status: str
+    includes_evidence: bool
+    summary: str
+    next_action: str
+
+
+@dataclass(frozen=True)
 class TaskPacket:
     packet_id: str
     created_at: str
@@ -110,6 +124,7 @@ class TaskPacket:
     gates: list[GateResult]
     gate_run: GateRunSummary
     execution_boundary: ExecutionBoundary
+    handoff: HandoffSummary
     packet_dir: str
     files: dict[str, str]
 
@@ -218,6 +233,9 @@ def _gate_run_summary(stage: str, gates: list[GateResult], attach_evidence: bool
     elif stage == "execute":
         status = "execution-ready"
         next_action = "Operator approval is required before any future runner can execute this packet."
+    elif stage == "handoff":
+        status = "handoff-ready"
+        next_action = "Review the handoff summary before assigning the next operator or runner."
     elif attach_evidence:
         status = "evidence-attached"
         next_action = "Ready for operator review with local evidence represented; execution remains manual."
@@ -288,14 +306,88 @@ def _execution_boundary(
             next_action="Review warnings before any future runner can execute this packet.",
         )
 
+    mode = "dry-run" if stage == "execute" else "handoff-dry-run"
+    next_action = (
+        "Review the handoff packet before a future bounded runner slice can execute."
+        if stage == "handoff"
+        else "Operator approval is required before a future bounded runner slice can execute."
+    )
     return ExecutionBoundary(
         status="awaiting-approval",
-        mode="dry-run",
+        mode=mode,
         approval_required=True,
         local_execution=False,
         remote_execution=False,
         summary=f"{lane.name} is prepared behind Hamiltonian gates; no agent or command executed.",
-        next_action="Operator approval is required before a future bounded runner slice can execute.",
+        next_action=next_action,
+    )
+
+
+def _handoff_summary(
+    stage: str,
+    lane: LaneAssignment,
+    gates: list[GateResult],
+    gate_run: GateRunSummary,
+    execution_boundary: ExecutionBoundary,
+    attach_evidence: bool,
+) -> HandoffSummary:
+    evidence_gate = next((gate for gate in gates if gate.id == "evidence"), None)
+    evidence_status = evidence_gate.status if evidence_gate else "unknown"
+    includes_evidence = bool(attach_evidence and evidence_status not in {"skipped", "pending", "unknown"})
+
+    if stage != "handoff":
+        return HandoffSummary(
+            status="not-prepared",
+            mode="inactive",
+            ready=False,
+            lane=lane.name,
+            gate_status=gate_run.status,
+            execution_status=execution_boundary.status,
+            evidence_status=evidence_status,
+            includes_evidence=includes_evidence,
+            summary="Handoff summary has not been prepared for this packet.",
+            next_action="Use Handoff after gates and execution approval state are ready.",
+        )
+
+    if gate_run.blocked or execution_boundary.status == "blocked":
+        return HandoffSummary(
+            status="blocked",
+            mode="operator-handoff",
+            ready=False,
+            lane=lane.name,
+            gate_status=gate_run.status,
+            execution_status=execution_boundary.status,
+            evidence_status=evidence_status,
+            includes_evidence=includes_evidence,
+            summary="Handoff refused because one or more gates blocked the packet.",
+            next_action="Clear blocked gates before handing this packet to another operator or runner.",
+        )
+
+    if execution_boundary.status == "needs-review":
+        return HandoffSummary(
+            status="needs-review",
+            mode="operator-handoff",
+            ready=False,
+            lane=lane.name,
+            gate_status=gate_run.status,
+            execution_status=execution_boundary.status,
+            evidence_status=evidence_status,
+            includes_evidence=includes_evidence,
+            summary="Handoff is paused because the execution boundary needs review.",
+            next_action="Review warnings before handing this packet to another operator or runner.",
+        )
+
+    return HandoffSummary(
+        status="ready",
+        mode="operator-handoff",
+        ready=True,
+        lane=lane.name,
+        gate_status=gate_run.status,
+        execution_status=execution_boundary.status,
+        evidence_status=evidence_status,
+        includes_evidence=includes_evidence,
+        summary="Handoff packet is ready for operator review with no agent or command executed.",
+        next_action="Use this packet as the local handoff brief for the next bounded work step.",
     )
 
 
@@ -422,6 +514,8 @@ def _packet_status(stage: str, gates: list[GateResult], attach_evidence: bool) -
         return "drafted"
     if stage == "execute":
         return "execution-ready"
+    if stage == "handoff":
+        return "handoff-ready"
     if attach_evidence:
         return "recorded"
     return "gated"
@@ -440,6 +534,7 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         f"- Status: **{packet.status.upper()}**",
         f"- Evidence requested: `{packet.attach_evidence}`",
         f"- Execution boundary: `{packet.execution_boundary.status}`",
+        f"- Handoff: `{packet.handoff.status}`",
         "",
         "## Task",
         "",
@@ -476,6 +571,18 @@ def build_packet_markdown(packet: TaskPacket) -> str:
             f"- Remote execution: `{packet.execution_boundary.remote_execution}`",
             f"- Summary: {packet.execution_boundary.summary}",
             f"- Next action: {packet.execution_boundary.next_action}",
+            "",
+            "## Handoff",
+            "",
+            f"- Status: `{packet.handoff.status}`",
+            f"- Ready: `{packet.handoff.ready}`",
+            f"- Lane: `{packet.handoff.lane}`",
+            f"- Gate status: `{packet.handoff.gate_status}`",
+            f"- Execution status: `{packet.handoff.execution_status}`",
+            f"- Evidence status: `{packet.handoff.evidence_status}`",
+            f"- Includes evidence: `{packet.handoff.includes_evidence}`",
+            f"- Summary: {packet.handoff.summary}",
+            f"- Next action: {packet.handoff.next_action}",
         ]
     )
     lines.extend(
@@ -522,6 +629,14 @@ def create_task_packet(
     lane = _lane_assignment(normalized_agent, normalized_stage)
     gate_run = _gate_run_summary(normalized_stage, gates, evidence_requested)
     execution_boundary = _execution_boundary(normalized_stage, lane, gate_run)
+    handoff = _handoff_summary(
+        normalized_stage,
+        lane,
+        gates,
+        gate_run,
+        execution_boundary,
+        evidence_requested,
+    )
     packet_json = packet_dir / "task-packet.json"
     packet_md = packet_dir / "task-packet.md"
     packet = TaskPacket(
@@ -538,6 +653,7 @@ def create_task_packet(
         gates=gates,
         gate_run=gate_run,
         execution_boundary=execution_boundary,
+        handoff=handoff,
         packet_dir=str(packet_dir),
         files={
             "json": str(packet_json),
@@ -587,6 +703,18 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "summary": "Legacy packet without execution-boundary metadata.",
         "next_action": "Review packet details.",
     }
+    handoff = packet.get("handoff") or {
+        "status": "unknown",
+        "mode": "legacy",
+        "ready": False,
+        "lane": lane.get("name"),
+        "gate_status": gate_run.get("status"),
+        "execution_status": execution_boundary.get("status"),
+        "evidence_status": evidence_gate.get("status", "unknown"),
+        "includes_evidence": False,
+        "summary": "Legacy packet without handoff metadata.",
+        "next_action": "Review packet details.",
+    }
     task = packet.get("task", "")
     return {
         "packet_id": packet.get("packet_id"),
@@ -599,6 +727,7 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "attach_evidence": packet.get("attach_evidence", False),
         "gate_run": gate_run,
         "execution_boundary": execution_boundary,
+        "handoff": handoff,
         "memory_status": memory_gate.get("status", "unknown"),
         "memory_mode": memory_gate.get("mode", "unknown"),
         "evidence_status": evidence_gate.get("status", "unknown"),

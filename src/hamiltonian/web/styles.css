@@ -287,6 +287,10 @@ textarea {
 }
 
 .command-row button:nth-child(4) {
+  background: #59635d;
+}
+
+.command-row button:nth-child(5) {
   background: var(--green);
 }
 

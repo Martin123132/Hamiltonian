@@ -67,7 +67,7 @@ capture:
 - gate decisions and fallback reasons
 - the gate-run status and next operator action
 - the execution boundary and approval requirement
-- handoff state
+- handoff state and next-step recommendation
 - optional evidence references
 
 Evidence can enrich a packet, but evidence is not the product boundary.

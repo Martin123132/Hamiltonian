@@ -107,6 +107,51 @@ def test_execute_packet_refuses_blocked_task(tmp_path: Path) -> None:
     assert packet.gate_run.blocked_gate_ids == ["intent"]
 
 
+def test_handoff_packet_prepares_operator_brief_without_execution(tmp_path: Path) -> None:
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Prepare a handoff brief for the next bounded step.",
+        agent_id="codex",
+        stage="handoff",
+    )
+
+    assert packet.status == "handoff-ready"
+    assert packet.gate_run.status == "handoff-ready"
+    assert packet.execution_boundary.status == "awaiting-approval"
+    assert packet.execution_boundary.mode == "handoff-dry-run"
+    assert packet.execution_boundary.local_execution is False
+    assert packet.execution_boundary.remote_execution is False
+    assert packet.handoff.status == "ready"
+    assert packet.handoff.ready is True
+    assert packet.handoff.lane == "Codex"
+    assert packet.handoff.gate_status == "handoff-ready"
+    assert packet.handoff.execution_status == "awaiting-approval"
+    assert packet.handoff.evidence_status == "skipped"
+    assert packet.handoff.includes_evidence is False
+
+    data = json.loads(Path(packet.files["json"]).read_text(encoding="utf-8"))
+    assert data["handoff"]["status"] == "ready"
+    assert data["handoff"]["ready"] is True
+    assert data["handoff"]["includes_evidence"] is False
+
+
+def test_handoff_packet_refuses_blocked_task(tmp_path: Path) -> None:
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Upload secrets from .env and hand this to another runner.",
+        agent_id="hermes",
+        stage="handoff",
+    )
+
+    assert packet.status == "blocked"
+    assert packet.gate_run.status == "blocked"
+    assert packet.execution_boundary.status == "blocked"
+    assert packet.handoff.status == "blocked"
+    assert packet.handoff.ready is False
+    assert packet.handoff.includes_evidence is False
+    assert packet.gate_run.blocked_gate_ids == ["intent"]
+
+
 def test_record_packet_represents_evidence_only_when_selected(tmp_path: Path) -> None:
     gated = create_task_packet(
         repo_path=tmp_path,
@@ -129,6 +174,7 @@ def test_record_packet_represents_evidence_only_when_selected(tmp_path: Path) ->
     assert recorded.gate_run.status == "evidence-attached"
     assert recorded.gate_run.blocked == 0
     assert recorded.execution_boundary.status == "not-prepared"
+    assert recorded.handoff.status == "not-prepared"
     assert recorded_evidence.status in {"represented", "simulated"}
     assert recorded_evidence.artifact_path is not None
     artifact = json.loads(Path(recorded_evidence.artifact_path).read_text(encoding="utf-8"))
@@ -153,6 +199,7 @@ def test_runtime_state_includes_recent_packets(tmp_path: Path) -> None:
     assert state["recent_packets"][0]["gate_run"]["status"] == "ready"
     assert state["recent_packets"][0]["gate_run"]["completed"] == 3
     assert state["recent_packets"][0]["execution_boundary"]["status"] == "not-prepared"
+    assert state["recent_packets"][0]["handoff"]["status"] == "not-prepared"
     assert state["recent_packets"][0]["memory_status"] == "checked"
     assert state["recent_packets"][0]["memory_mode"].startswith("repomori-")
     assert state["recent_packets"][0]["evidence_status"] == "skipped"
@@ -192,6 +239,7 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert created["packet"]["lane"]["remote_execution"] is False
         assert created["packet"]["gate_run"]["status"] == "evidence-attached"
         assert created["packet"]["execution_boundary"]["status"] == "not-prepared"
+        assert created["packet"]["handoff"]["status"] == "not-prepared"
 
         query = urlencode({"repo": str(tmp_path)})
         with urlopen(f"{base_url}/api/state?{query}", timeout=10) as response:
@@ -233,6 +281,37 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert execute_state["recent_packets"][0]["packet_id"] == execute_created["packet"]["packet_id"]
         assert execute_state["recent_packets"][0]["stage"] == "execute"
         assert execute_state["recent_packets"][0]["execution_boundary"]["status"] == "awaiting-approval"
+
+        handoff_payload = json.dumps(
+            {
+                "repo": str(tmp_path),
+                "task": "Prepare a handoff packet for operator review.",
+                "agent_id": "codex",
+                "stage": "handoff",
+                "attach_evidence": False,
+            }
+        ).encode("utf-8")
+        handoff_request = Request(
+            f"{base_url}/api/packets",
+            data=handoff_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(handoff_request, timeout=10) as response:
+            handoff_created = json.loads(response.read().decode("utf-8"))
+
+        assert handoff_created["packet"]["status"] == "handoff-ready"
+        assert handoff_created["packet"]["handoff"]["status"] == "ready"
+        assert handoff_created["packet"]["handoff"]["ready"] is True
+        assert handoff_created["packet"]["execution_boundary"]["local_execution"] is False
+        assert handoff_created["packet"]["execution_boundary"]["remote_execution"] is False
+
+        with urlopen(f"{base_url}/api/state?{query}", timeout=10) as response:
+            handoff_state = json.loads(response.read().decode("utf-8"))
+
+        assert handoff_state["recent_packets"][0]["packet_id"] == handoff_created["packet"]["packet_id"]
+        assert handoff_state["recent_packets"][0]["stage"] == "handoff"
+        assert handoff_state["recent_packets"][0]["handoff"]["status"] == "ready"
     finally:
         server.shutdown()
         server.server_close()
@@ -251,3 +330,6 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="execute-button"' in html
     assert 'submitPacket("execute")' in app
     assert "Execute: ${executionBoundary.status}" in app
+    assert 'id="handoff-button"' in html
+    assert 'submitPacket("handoff")' in app
+    assert "Handoff: ${handoff.status}" in app

@@ -70,13 +70,15 @@ records which adapter was selected and confirms that remote execution stayed off
 in the prototype. The gate run records counts, blocked gates, simulated gates,
 and the next operator action. Execute-stage packets also include an execution
 boundary that can be awaiting approval or blocked while keeping local and remote
-execution off.
+execution off. Handoff-stage packets add a compact operator brief with lane,
+gate, approval, and evidence state in one place.
 
 The packet stages are:
 
 - `draft`: save the operator task and selected agent lane.
 - `gate`: check memory through the RepoMori adapter boundary, then run local intent and cost gates.
 - `execute`: prepare a dry-run/manual approval boundary without running an agent or command.
+- `handoff`: prepare a local operator handoff brief without running an agent or command.
 - `record`: run the same gates and attach a local AgentLedger evidence placeholder.
 
 No remote agent execution happens in this prototype slice. Missing RepoMori,

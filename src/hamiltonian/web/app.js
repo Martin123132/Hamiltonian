@@ -162,6 +162,14 @@ function renderRecentPackets(data) {
       remote_execution: false,
       next_action: "Review packet details.",
     };
+    const handoff = packet.handoff || {
+      status: "unknown",
+      mode: "legacy",
+      ready: false,
+      evidence_status: "unknown",
+      includes_evidence: false,
+      next_action: "Review packet details.",
+    };
     const memoryStatus = packet.memory_status || "unknown";
     const memoryMode = packet.memory_mode || "unknown";
     const evidenceStatus = packet.evidence_status || "unknown";
@@ -179,12 +187,15 @@ function renderRecentPackets(data) {
     const localExec = executionBoundary.local_execution ? "local execution armed" : "local execution off";
     const remoteExec = executionBoundary.remote_execution ? "remote execution armed" : "remote execution off";
     execution.textContent = `Execute: ${executionBoundary.status} (${executionBoundary.mode}). ${localExec}; ${remoteExec}.`;
+    const handoffLine = document.createElement("p");
+    const handoffReady = handoff.ready ? "ready" : "not ready";
+    handoffLine.textContent = `Handoff: ${handoff.status} (${handoff.mode}, ${handoffReady}). Evidence: ${handoff.evidence_status}.`;
     const proof = document.createElement("p");
     proof.textContent = `Memory: ${memoryStatus} (${memoryMode}). Evidence: ${evidenceStatus}. Packet: ${packet.packet_id}`;
     const next = document.createElement("p");
     next.className = "packet-next";
-    next.textContent = executionBoundary.next_action || gateRun.next_action;
-    body.append(title, detail, meta, execution, proof, next);
+    next.textContent = handoff.next_action || executionBoundary.next_action || gateRun.next_action;
+    body.append(title, detail, meta, execution, handoffLine, proof, next);
     row.append(body, pill(gateRun.status || packet.status));
     list.appendChild(row);
   });
@@ -219,6 +230,7 @@ function renderPacket() {
     draft: "Draft only.",
     gate: "Gates will run.",
     execute: "Execution boundary will be prepared without running.",
+    handoff: "Operator handoff will be prepared without running.",
     record: "Evidence packet requested.",
   };
   const detail = modeCopy[state.packetMode] || "Evidence optional.";
@@ -304,6 +316,12 @@ $("#gate-button").addEventListener("click", () => {
 
 $("#execute-button").addEventListener("click", () => {
   submitPacket("execute").catch((error) => {
+    $("#packet-preview").textContent = error.message;
+  });
+});
+
+$("#handoff-button").addEventListener("click", () => {
+  submitPacket("handoff").catch((error) => {
     $("#packet-preview").textContent = error.message;
   });
 });
