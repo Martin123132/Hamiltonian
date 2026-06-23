@@ -3,9 +3,12 @@ import json
 from pathlib import Path
 import threading
 from urllib.parse import urlencode
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from hamiltonian.packets import create_task_packet, list_task_packets
+import pytest
+
+from hamiltonian.packets import create_task_packet, get_task_packet, list_task_packets
 from hamiltonian.runtime import runtime_state_dict
 from hamiltonian.server import CockpitHandler
 
@@ -152,6 +155,26 @@ def test_handoff_packet_refuses_blocked_task(tmp_path: Path) -> None:
     assert packet.gate_run.blocked_gate_ids == ["intent"]
 
 
+def test_packet_detail_loader_returns_full_packet_safely(tmp_path: Path) -> None:
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Prepare a packet detail view.",
+        agent_id="codex",
+        stage="handoff",
+    )
+
+    loaded = get_task_packet(tmp_path, packet.packet_id)
+
+    assert loaded["packet_id"] == packet.packet_id
+    assert loaded["task"] == "Prepare a packet detail view."
+    assert loaded["handoff"]["status"] == "ready"
+
+    with pytest.raises(ValueError):
+        get_task_packet(tmp_path, "../secret")
+    with pytest.raises(FileNotFoundError):
+        get_task_packet(tmp_path, "missing-packet")
+
+
 def test_record_packet_represents_evidence_only_when_selected(tmp_path: Path) -> None:
     gated = create_task_packet(
         repo_path=tmp_path,
@@ -242,6 +265,22 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert created["packet"]["handoff"]["status"] == "not-prepared"
 
         query = urlencode({"repo": str(tmp_path)})
+        with urlopen(
+            f"{base_url}/api/packets/{created['packet']['packet_id']}?{query}",
+            timeout=10,
+        ) as response:
+            detail = json.loads(response.read().decode("utf-8"))
+
+        assert detail["packet"]["packet_id"] == created["packet"]["packet_id"]
+        assert detail["packet"]["task"] == "Gate this task and represent evidence."
+        assert detail["packet"]["gates"][0]["id"] == "memory"
+
+        try:
+            urlopen(f"{base_url}/api/packets/%2e%2e%2fsecret?{query}", timeout=10)
+            raise AssertionError("invalid packet id should fail")
+        except HTTPError as exc:
+            assert exc.code == 400
+
         with urlopen(f"{base_url}/api/state?{query}", timeout=10) as response:
             state = json.loads(response.read().decode("utf-8"))
 
@@ -323,7 +362,11 @@ def test_static_ui_targets_packet_api() -> None:
     app = (ROOT / "src" / "hamiltonian" / "web" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="packet-list"' in html
+    assert 'id="packet-detail"' in html
     assert 'fetch("/api/packets"' in app
+    assert "function renderPacketDetail" in app
+    assert "loadPacketDetail(packet.packet_id)" in app
+    assert "fetch(`/api/packets/${encodeURIComponent(packetId)}?${params.toString()}`)" in app
     assert "Memory: ${memoryStatus}" in app
     assert "Lane: ${lane.status}" in app
     assert "Gates: ${gateRun.completed}/${gateRun.total}" in app

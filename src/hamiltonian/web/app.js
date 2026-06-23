@@ -3,6 +3,7 @@ const state = {
   data: null,
   packetMode: "draft",
   lastPacket: null,
+  selectedPacket: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -196,9 +197,104 @@ function renderRecentPackets(data) {
     next.className = "packet-next";
     next.textContent = handoff.next_action || executionBoundary.next_action || gateRun.next_action;
     body.append(title, detail, meta, execution, handoffLine, proof, next);
-    row.append(body, pill(gateRun.status || packet.status));
+    const actions = document.createElement("div");
+    actions.className = "packet-actions";
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "compact-button";
+    openButton.textContent = "Open";
+    openButton.title = "Open packet detail";
+    openButton.addEventListener("click", () => {
+      loadPacketDetail(packet.packet_id).catch((error) => {
+        $("#packet-detail-status").textContent = error.message;
+      });
+    });
+    actions.append(pill(gateRun.status || packet.status), openButton);
+    row.append(body, actions);
     list.appendChild(row);
   });
+}
+
+function detailRow(label, value) {
+  const row = document.createElement("div");
+  row.className = "detail-row";
+  const key = document.createElement("strong");
+  key.textContent = label;
+  const val = document.createElement("span");
+  val.textContent = value ?? "unknown";
+  row.append(key, val);
+  return row;
+}
+
+function renderPacketDetail(packet) {
+  const title = $("#packet-detail-title");
+  const status = $("#packet-detail-status");
+  const detail = $("#packet-detail");
+  clear(detail);
+
+  if (!packet) {
+    title.textContent = "No packet selected";
+    status.textContent = "Waiting";
+    const empty = document.createElement("p");
+    empty.className = "muted-line";
+    empty.textContent = "No packet selected.";
+    detail.appendChild(empty);
+    return;
+  }
+
+  const lane = packet.lane || {};
+  const gateRun = packet.gate_run || {};
+  const executionBoundary = packet.execution_boundary || {};
+  const handoff = packet.handoff || {};
+  const gates = packet.gates || [];
+  const evidenceGate = gates.find((gate) => gate.id === "evidence") || {};
+
+  title.textContent = packet.packet_id || "Packet detail";
+  status.textContent = packet.status || "unknown";
+
+  const summary = document.createElement("div");
+  summary.className = "detail-grid";
+  summary.append(
+    detailRow("Stage", packet.stage),
+    detailRow("Agent", packet.agent_name),
+    detailRow("Lane", `${lane.status || "unknown"} / ${lane.execution || "unknown"}`),
+    detailRow("Gate run", `${gateRun.status || "unknown"} (${gateRun.completed || 0}/${gateRun.total || 0})`),
+    detailRow("Execution", `${executionBoundary.status || "unknown"} / ${executionBoundary.mode || "unknown"}`),
+    detailRow("Handoff", `${handoff.status || "unknown"} / ${handoff.ready ? "ready" : "not ready"}`),
+    detailRow("Evidence", evidenceGate.status || "unknown"),
+    detailRow("Remote execution", String(Boolean(executionBoundary.remote_execution || lane.remote_execution)))
+  );
+
+  const task = document.createElement("section");
+  task.className = "detail-block";
+  const taskTitle = document.createElement("strong");
+  taskTitle.textContent = "Task";
+  const taskBody = document.createElement("p");
+  taskBody.textContent = packet.task || "";
+  task.append(taskTitle, taskBody);
+
+  const next = document.createElement("section");
+  next.className = "detail-block";
+  const nextTitle = document.createElement("strong");
+  nextTitle.textContent = "Next";
+  const nextBody = document.createElement("p");
+  nextBody.textContent = handoff.next_action || executionBoundary.next_action || gateRun.next_action || "";
+  next.append(nextTitle, nextBody);
+
+  const gateList = document.createElement("div");
+  gateList.className = "detail-gates";
+  gates.forEach((gate) => {
+    const gateItem = document.createElement("article");
+    gateItem.className = "detail-gate";
+    const gateTitle = document.createElement("strong");
+    gateTitle.textContent = gate.name;
+    const gateSummary = document.createElement("p");
+    gateSummary.textContent = `${gate.status} (${gate.mode}). ${gate.summary}`;
+    gateItem.append(gateTitle, gateSummary, pill(gate.status));
+    gateList.appendChild(gateItem);
+  });
+
+  detail.append(summary, task, next, gateList);
 }
 
 function renderNextActions(data) {
@@ -254,6 +350,7 @@ function render(data) {
   renderGates(data);
   renderIntegrations(data);
   renderRecentPackets(data);
+  renderPacketDetail(state.selectedPacket);
   renderNextActions(data);
   renderPacket();
 }
@@ -266,6 +363,19 @@ async function load(repo) {
   if (!response.ok || data.error) throw new Error(data.error || "State request failed");
   state.repo = data.repo;
   render(data);
+}
+
+async function loadPacketDetail(packetId) {
+  if (!packetId) return;
+  const params = new URLSearchParams();
+  const repo = $("#repo-input").value || state.repo;
+  if (repo) params.set("repo", repo);
+  $("#packet-detail-status").textContent = "Loading";
+  const response = await fetch(`/api/packets/${encodeURIComponent(packetId)}?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Packet detail request failed");
+  state.selectedPacket = data.packet;
+  renderPacketDetail(data.packet);
 }
 
 async function submitPacket(stageName) {
@@ -292,6 +402,7 @@ async function submitPacket(stageName) {
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || "Packet request failed");
   state.lastPacket = data.packet;
+  state.selectedPacket = data.packet;
   await load(repo);
 }
 

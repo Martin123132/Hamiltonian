@@ -81,6 +81,10 @@ The packet stages are:
 - `handoff`: prepare a local operator handoff brief without running an agent or command.
 - `record`: run the same gates and attach a local AgentLedger evidence placeholder.
 
+The cockpit exposes recent packet summaries through `/api/packets` and full
+packet detail through `/api/packets/<packet-id>`. Detail reads stay inside the
+repo-local task packet store.
+
 No remote agent execution happens in this prototype slice. Missing RepoMori,
 Jester, Tokometer, and AgentLedger integrations degrade to explicit local
 fallback gate results.

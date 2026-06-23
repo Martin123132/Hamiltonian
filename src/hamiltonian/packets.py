@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
 AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATALOG.items()}
 
 STAGES = {"draft", "gate", "execute", "handoff", "record"}
+PACKET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 DANGEROUS_MARKERS = (
     "rm -rf",
     "remove-item",
@@ -667,6 +669,21 @@ def create_task_packet(
 
 def load_task_packet(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def get_task_packet(repo_path: Path, packet_id: str) -> dict[str, Any]:
+    repo = ensure_repo(repo_path)
+    clean_id = packet_id.strip()
+    if not PACKET_ID_PATTERN.fullmatch(clean_id):
+        raise ValueError("invalid packet id")
+
+    root = tasks_root(repo).resolve()
+    packet_json = (root / clean_id / "task-packet.json").resolve()
+    if root not in packet_json.parents:
+        raise ValueError("packet id resolved outside task storage")
+    if not packet_json.exists():
+        raise FileNotFoundError("packet not found")
+    return load_task_packet(packet_json)
 
 
 def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:

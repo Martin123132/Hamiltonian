@@ -72,6 +72,9 @@ capture:
 
 Evidence can enrich a packet, but evidence is not the product boundary.
 
+Packet detail views should render from the local task packet store. They should
+not become arbitrary file browsers or expose private source content.
+
 ## Non-Goals
 
 Hamiltonian should not become:
