@@ -8,7 +8,7 @@ ROOT = Path(__file__).parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from hamiltonian.packets import create_task_packet
+from hamiltonian.packets import TASK_INDEX_SCHEMA, create_task_packet, task_index_path
 from hamiltonian.runtime import build_runtime_state
 
 
@@ -207,6 +207,42 @@ def test_packets_cli_lists_details_and_exports(tmp_path: Path) -> None:
     )
     assert invalid_proc.returncode == 2
     assert "invalid packet id" in invalid_proc.stderr
+
+
+def test_packets_cli_rebuilds_packet_index(tmp_path: Path) -> None:
+    first = create_task_packet(
+        repo_path=tmp_path,
+        task="Create the first packet before rebuilding the index.",
+        agent_id="codex",
+        stage="draft",
+    )
+    second = create_task_packet(
+        repo_path=tmp_path,
+        task="Create the second packet before rebuilding the index.",
+        agent_id="local",
+        stage="gate",
+    )
+    index_path = task_index_path(tmp_path)
+    index_path.write_text(
+        json.dumps({"schema": "broken", "packet_count": 0, "packets": []}),
+        encoding="utf-8",
+    )
+
+    rebuild_proc = run_cli(["packets", "--repo", str(tmp_path), "rebuild-index", "--json"])
+
+    assert rebuild_proc.returncode == 0, rebuild_proc.stderr
+    rebuilt = json.loads(rebuild_proc.stdout)["index"]
+    assert rebuilt["schema"] == TASK_INDEX_SCHEMA
+    assert rebuilt["packet_count"] == 2
+    assert {packet["packet_id"] for packet in rebuilt["packets"]} == {
+        first.packet_id,
+        second.packet_id,
+    }
+    assert "packet_dir" not in rebuilt["packets"][0]
+
+    saved = json.loads(index_path.read_text(encoding="utf-8"))
+    assert saved["schema"] == TASK_INDEX_SCHEMA
+    assert saved["packet_count"] == 2
 
 
 def test_runtime_state_keeps_agentledger_optional(tmp_path: Path) -> None:

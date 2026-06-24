@@ -14,6 +14,7 @@ from .packets import (
     export_handoff_markdown,
     get_task_packet,
     list_task_packets,
+    write_task_index,
 )
 from .server import run_cockpit
 
@@ -81,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
     packets_list_p = packets_sub.add_parser("list", help="list recent task packets")
     packets_list_p.add_argument("--limit", type=int, default=8, help="maximum packets to show")
     packets_list_p.add_argument("--json", action="store_true", help="print JSON")
+
+    packets_rebuild_p = packets_sub.add_parser(
+        "rebuild-index",
+        help="rebuild the local task packet index",
+    )
+    packets_rebuild_p.add_argument("--json", action="store_true", help="print JSON")
 
     packets_detail_p = packets_sub.add_parser("detail", help="show full packet detail")
     packets_detail_p.add_argument("packet_id", help="packet id")
@@ -188,6 +195,14 @@ def main(argv: list[str] | None = None) -> int:
                     for packet in packets:
                         print_packet_summary(packet)
                         print()
+                return 0
+
+            if args.packets_command == "rebuild-index":
+                index = write_task_index(Path(args.repo))
+                if args.json:
+                    print(json.dumps({"index": index}, indent=2))
+                else:
+                    print(f"Rebuilt packet index: {index['packet_count']} packets")
                 return 0
 
             if args.packets_command == "detail":
