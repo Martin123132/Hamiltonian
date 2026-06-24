@@ -62,6 +62,40 @@ def test_packets_cli_creates_local_packets(tmp_path: Path) -> None:
     assert Path(draft["files"]["markdown"]).exists()
     assert not (Path(draft["packet_dir"]) / "evidence").exists()
 
+    advance_proc = run_cli(
+        [
+            "packets",
+            "--repo",
+            str(tmp_path),
+            "advance",
+            draft["packet_id"],
+            "--stage",
+            "gate",
+            "--json",
+        ]
+    )
+    assert advance_proc.returncode == 0, advance_proc.stderr
+    advanced = json.loads(advance_proc.stdout)["packet"]
+    assert advanced["packet_id"] == draft["packet_id"]
+    assert advanced["stage"] == "gate"
+    assert advanced["history"][-1]["from_stage"] == "draft"
+    assert advanced["history"][-1]["to_stage"] == "gate"
+    assert Path(advanced["files"]["history"]).exists()
+
+    same_stage_proc = run_cli(
+        [
+            "packets",
+            "--repo",
+            str(tmp_path),
+            "advance",
+            draft["packet_id"],
+            "--stage",
+            "gate",
+        ]
+    )
+    assert same_stage_proc.returncode == 2
+    assert "target stage must advance packet forward" in same_stage_proc.stderr
+
     evidence_proc = run_cli(
         [
             "packets",

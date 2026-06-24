@@ -83,6 +83,10 @@ CLI packet commands should create, read, repair, and write the same local packet
 store as the cockpit, without adding remote execution, telemetry, or
 publication behavior.
 
+Packet advancement should preserve the packet id and packet directory, append a
+local history event, rerun local gates for the target stage, and keep remote
+execution off.
+
 Packet exports are local handoff briefs. They should be sanitized, regenerated
 inside the packet directory, and treated as operator notes rather than public
 release material.
@@ -134,6 +138,7 @@ hamiltonian doctor --repo .
 hamiltonian run --repo . -- <command>
 hamiltonian run --repo . --runner agentledger -- <command>
 hamiltonian packets --repo . create --task "Draft a local packet"
+hamiltonian packets --repo . advance <packet-id> --stage gate
 hamiltonian packets --repo . list
 hamiltonian packets --repo . rebuild-index
 ```

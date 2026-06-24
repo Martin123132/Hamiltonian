@@ -10,6 +10,7 @@ import pytest
 
 from hamiltonian.packets import (
     TASK_INDEX_SCHEMA,
+    advance_task_packet,
     create_task_packet,
     export_handoff_markdown,
     get_task_packet,
@@ -26,6 +27,12 @@ ROOT = Path(__file__).parents[1]
 
 def gate(packet, gate_id: str):
     return next(item for item in packet.gates if item.id == gate_id)
+
+
+def gate_data(packet: dict[str, object], gate_id: str):
+    gates = packet["gates"]
+    assert isinstance(gates, list)
+    return next(item for item in gates if isinstance(item, dict) and item["id"] == gate_id)
 
 
 def test_draft_packet_persists_pending_gates(tmp_path: Path) -> None:
@@ -51,6 +58,60 @@ def test_draft_packet_persists_pending_gates(tmp_path: Path) -> None:
     assert gate(packet, "intent").status == "pending"
     assert gate(packet, "evidence").status == "skipped"
     assert list_task_packets(tmp_path)[0]["packet_id"] == packet.packet_id
+
+
+def test_advance_packet_preserves_identity_and_records_history(tmp_path: Path) -> None:
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Move this draft through local gates and prepare handoff.",
+        agent_id="codex",
+        stage="draft",
+    )
+
+    gated = advance_task_packet(tmp_path, packet.packet_id, "gate")
+
+    assert gated["packet_id"] == packet.packet_id
+    assert gated["created_at"] == packet.created_at
+    assert gated["updated_at"] >= packet.created_at
+    assert gated["stage"] == "gate"
+    assert gated["status"] == "gated"
+    assert gated["lane"]["id"] == "codex"
+    assert gated["lane"]["remote_execution"] is False
+    assert gated["gate_run"]["status"] == "ready"
+    assert gate_data(gated, "memory")["status"] == "checked"
+    assert gate_data(gated, "evidence")["status"] == "skipped"
+    assert len(gated["history"]) == 2
+    assert gated["history"][-1]["event"] == "advanced"
+    assert gated["history"][-1]["from_stage"] == "draft"
+    assert gated["history"][-1]["to_stage"] == "gate"
+    history_path = Path(gated["files"]["history"])
+    assert history_path.exists()
+    assert json.loads(history_path.read_text(encoding="utf-8"))[-1]["to_stage"] == "gate"
+
+    handoff = advance_task_packet(tmp_path, packet.packet_id, "handoff", attach_evidence=True)
+    evidence_gate = gate_data(handoff, "evidence")
+
+    assert handoff["packet_id"] == packet.packet_id
+    assert handoff["stage"] == "handoff"
+    assert handoff["status"] == "handoff-ready"
+    assert handoff["attach_evidence"] is True
+    assert handoff["handoff"]["status"] == "ready"
+    assert handoff["handoff"]["includes_evidence"] is True
+    assert evidence_gate["status"] in {"represented", "simulated"}
+    assert Path(evidence_gate["artifact_path"]).exists()
+    assert len(handoff["history"]) == 3
+
+    loaded = get_task_packet(tmp_path, packet.packet_id)
+    index = read_task_index(tmp_path)
+    assert loaded["stage"] == "handoff"
+    assert index is not None
+    assert index["packets"][0]["packet_id"] == packet.packet_id
+    assert index["packets"][0]["stage"] == "handoff"
+    assert index["packets"][0]["history_count"] == 3
+    assert index["packets"][0]["last_event"] == "advanced"
+
+    with pytest.raises(ValueError, match="advance packet forward"):
+        advance_task_packet(tmp_path, packet.packet_id, "gate")
 
 
 def test_gate_packet_blocks_risky_task_without_evidence(tmp_path: Path) -> None:
@@ -362,6 +423,47 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert state["recent_packets"][0]["memory_status"] == "checked"
         assert state["recent_packets"][0]["memory_mode"].startswith("repomori-")
         assert state["recent_packets"][0]["evidence_status"] in {"represented", "simulated"}
+
+        draft_payload = json.dumps(
+            {
+                "repo": str(tmp_path),
+                "task": "Draft this packet before advancing it through the API.",
+                "agent_id": "hermes",
+                "stage": "draft",
+                "attach_evidence": False,
+            }
+        ).encode("utf-8")
+        draft_request = Request(
+            f"{base_url}/api/packets",
+            data=draft_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(draft_request, timeout=10) as response:
+            draft_created = json.loads(response.read().decode("utf-8"))
+
+        advance_payload = json.dumps({"stage": "gate", "attach_evidence": False}).encode("utf-8")
+        advance_request = Request(
+            f"{base_url}/api/packets/{draft_created['packet']['packet_id']}/advance?{query}",
+            data=advance_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(advance_request, timeout=10) as response:
+            advanced = json.loads(response.read().decode("utf-8"))
+
+        assert advanced["packet"]["packet_id"] == draft_created["packet"]["packet_id"]
+        assert advanced["packet"]["stage"] == "gate"
+        assert advanced["packet"]["history"][-1]["from_stage"] == "draft"
+        assert advanced["packet"]["history"][-1]["to_stage"] == "gate"
+        assert advanced["packet"]["lane"]["remote_execution"] is False
+
+        with urlopen(f"{base_url}/api/state?{query}", timeout=10) as response:
+            advanced_state = json.loads(response.read().decode("utf-8"))
+
+        assert advanced_state["recent_packets"][0]["packet_id"] == advanced["packet"]["packet_id"]
+        assert advanced_state["recent_packets"][0]["stage"] == "gate"
+        assert advanced_state["recent_packets"][0]["history_count"] == 2
 
         execute_payload = json.dumps(
             {

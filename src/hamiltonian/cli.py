@@ -8,8 +8,10 @@ import sys
 
 from .core import control_run, doctor
 from .packets import (
+    ADVANCE_STAGES,
     AGENTS,
     STAGES,
+    advance_task_packet,
     create_task_packet,
     export_handoff_markdown,
     get_task_packet,
@@ -78,6 +80,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="represent optional AgentLedger evidence without executing agents",
     )
     packets_create_p.add_argument("--json", action="store_true", help="print JSON")
+
+    packets_advance_p = packets_sub.add_parser("advance", help="advance an existing task packet")
+    packets_advance_p.add_argument("packet_id", help="packet id")
+    packets_advance_p.add_argument(
+        "--stage",
+        choices=ADVANCE_STAGES,
+        required=True,
+        help="later packet lifecycle stage",
+    )
+    packets_advance_p.add_argument(
+        "--attach-evidence",
+        action="store_true",
+        help="represent optional AgentLedger evidence without executing agents",
+    )
+    packets_advance_p.add_argument("--json", action="store_true", help="print JSON")
 
     packets_list_p = packets_sub.add_parser("list", help="list recent task packets")
     packets_list_p.add_argument("--limit", type=int, default=8, help="maximum packets to show")
@@ -183,6 +200,19 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps({"packet": packet_data}, indent=2))
                 else:
                     print_packet_summary(packet_data)
+                return 0
+
+            if args.packets_command == "advance":
+                packet = advance_task_packet(
+                    repo_path=Path(args.repo),
+                    packet_id=args.packet_id,
+                    stage=args.stage,
+                    attach_evidence=args.attach_evidence,
+                )
+                if args.json:
+                    print(json.dumps({"packet": packet}, indent=2))
+                else:
+                    print_packet_summary(packet)
                 return 0
 
             if args.packets_command == "list":

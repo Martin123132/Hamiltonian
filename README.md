@@ -46,6 +46,7 @@ hamiltonian doctor --repo .
 hamiltonian run --repo . -- python -c "print('hello Hamiltonian')"
 hamiltonian run --repo . --runner agentledger -- python -m pytest
 hamiltonian packets --repo . create --task "Draft a local packet" --agent codex
+hamiltonian packets --repo . advance <packet-id> --stage gate
 hamiltonian packets --repo . list
 hamiltonian packets --repo . rebuild-index
 hamiltonian packets --repo . detail <packet-id>
@@ -68,6 +69,7 @@ The cockpit now persists local task packets under:
   task-packet.md
   evidence/
     agentledger-placeholder.json
+  history.json
 .hamiltonian/tasks/index.json
 ```
 
@@ -78,6 +80,10 @@ and the next operator action. Execute-stage packets also include an execution
 boundary that can be awaiting approval or blocked while keeping local and remote
 execution off. Handoff-stage packets add a compact operator brief with lane,
 gate, approval, and evidence state in one place.
+
+Packets can also advance in place. Advancement preserves the packet id and
+packet directory, reruns the local gates for the target stage, updates the
+packet index, and appends a local history event without executing agents.
 
 The packet stages are:
 
@@ -94,8 +100,8 @@ repo-local task packet store.
 Recent packet listings use `.hamiltonian/tasks/index.json` first and rebuild it
 from packet files when the index is missing or invalid.
 
-The same packet create, list, index rebuild, detail, and sanitized export
-surfaces are available from the CLI through `hamiltonian packets`.
+The same packet create, advance, list, index rebuild, detail, and sanitized
+export surfaces are available from the CLI through `hamiltonian packets`.
 
 Packet detail can export a sanitized handoff markdown file to:
 

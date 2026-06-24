@@ -38,7 +38,10 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
 AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATALOG.items()}
 
 TASK_INDEX_SCHEMA = "hamiltonian.task-index.v1"
-STAGES = {"draft", "gate", "execute", "handoff", "record"}
+STAGE_ORDER = ("draft", "gate", "execute", "handoff", "record")
+STAGES = set(STAGE_ORDER)
+ADVANCE_STAGES = STAGE_ORDER[1:]
+STAGE_RANK = {stage: index for index, stage in enumerate(STAGE_ORDER)}
 PACKET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 ABSOLUTE_PATH_PATTERN = re.compile(r"(?i)\b[A-Z]:[\\/][^\s`'\"<>]+")
 SECRET_ASSIGNMENT_PATTERN = re.compile(
@@ -123,6 +126,7 @@ class HandoffSummary:
 class TaskPacket:
     packet_id: str
     created_at: str
+    updated_at: str
     repo: str
     agent_id: str
     agent_name: str
@@ -135,6 +139,7 @@ class TaskPacket:
     gate_run: GateRunSummary
     execution_boundary: ExecutionBoundary
     handoff: HandoffSummary
+    history: list[dict[str, Any]]
     packet_dir: str
     files: dict[str, str]
 
@@ -145,6 +150,10 @@ def tasks_root(repo: Path) -> Path:
 
 def task_index_path(repo: Path) -> Path:
     return tasks_root(repo) / "index.json"
+
+
+def packet_history_path(packet_dir: Path) -> Path:
+    return packet_dir / "history.json"
 
 
 def utc_packet_id() -> str:
@@ -535,12 +544,41 @@ def _packet_status(stage: str, gates: list[GateResult], attach_evidence: bool) -
     return "gated"
 
 
+def _history_event(
+    event: str,
+    at: str,
+    stage: str,
+    status: str,
+    summary: str,
+    attach_evidence: bool,
+    from_stage: str | None = None,
+    to_stage: str | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "event": event,
+        "at": at,
+        "stage": stage,
+        "status": status,
+        "summary": summary,
+        "attach_evidence": attach_evidence,
+        "local_only": True,
+        "remote_execution": False,
+    }
+    if from_stage is not None:
+        record["from_stage"] = from_stage
+    if to_stage is not None:
+        record["to_stage"] = to_stage
+    return record
+
+
 def build_packet_markdown(packet: TaskPacket) -> str:
     lines = [
         "# Hamiltonian Task Packet",
         "",
         f"- Packet: `{packet.packet_id}`",
         f"- Repo: `{packet.repo}`",
+        f"- Created: `{packet.created_at}`",
+        f"- Updated: `{packet.updated_at}`",
         f"- Agent: `{packet.agent_name}`",
         f"- Lane kind: `{packet.lane.kind}`",
         f"- Lane execution: `{packet.lane.execution}`",
@@ -597,8 +635,20 @@ def build_packet_markdown(packet: TaskPacket) -> str:
             f"- Includes evidence: `{packet.handoff.includes_evidence}`",
             f"- Summary: {packet.handoff.summary}",
             f"- Next action: {packet.handoff.next_action}",
+            "",
+            "## History",
         ]
     )
+    if packet.history:
+        for event in packet.history:
+            lines.append(
+                f"- {event.get('at')}: {event.get('event')} "
+                f"{event.get('from_stage', event.get('stage'))} -> "
+                f"{event.get('to_stage', event.get('stage'))}. "
+                f"{event.get('summary')}"
+            )
+    else:
+        lines.append("- No history events recorded.")
     lines.extend(
         [
             "",
@@ -632,6 +682,7 @@ def create_task_packet(
     packet_id = utc_packet_id()
     packet_dir = tasks_root(repo) / packet_id
     packet_dir.mkdir(parents=True, exist_ok=True)
+    created_at = datetime.now(timezone.utc).isoformat()
 
     evidence_requested = bool(attach_evidence or normalized_stage == "record")
     integrations = detect_integrations(repo)
@@ -653,31 +704,154 @@ def create_task_packet(
     )
     packet_json = packet_dir / "task-packet.json"
     packet_md = packet_dir / "task-packet.md"
+    history_path = packet_history_path(packet_dir)
+    status = _packet_status(normalized_stage, gates, evidence_requested)
+    history = [
+        _history_event(
+            event="created",
+            at=created_at,
+            stage=normalized_stage,
+            status=status,
+            summary="Created local task packet.",
+            attach_evidence=evidence_requested,
+        )
+    ]
     packet = TaskPacket(
         packet_id=packet_id,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=created_at,
+        updated_at=created_at,
         repo=str(repo),
         agent_id=normalized_agent,
         agent_name=AGENTS[normalized_agent],
         lane=lane,
         task=clean_task,
         stage=normalized_stage,
-        status=_packet_status(normalized_stage, gates, evidence_requested),
+        status=status,
         attach_evidence=evidence_requested,
         gates=gates,
         gate_run=gate_run,
         execution_boundary=execution_boundary,
         handoff=handoff,
+        history=history,
         packet_dir=str(packet_dir),
         files={
             "json": str(packet_json),
             "markdown": str(packet_md),
+            "history": str(history_path),
         },
     )
+    write_text(history_path, json.dumps(history, indent=2))
     write_text(packet_json, json.dumps(asdict(packet), indent=2))
     write_text(packet_md, build_packet_markdown(packet))
     write_task_index(repo)
     return packet
+
+
+def advance_task_packet(
+    repo_path: Path,
+    packet_id: str,
+    stage: str,
+    attach_evidence: bool = False,
+) -> dict[str, Any]:
+    repo = ensure_repo(repo_path)
+    target_stage = stage.lower().strip()
+    if target_stage not in ADVANCE_STAGES:
+        raise ValueError(f"stage must be one of: {', '.join(ADVANCE_STAGES)}")
+
+    packet = get_task_packet(repo, packet_id)
+    current_stage = str(packet.get("stage") or "draft").lower().strip()
+    if current_stage not in STAGES:
+        raise ValueError(f"packet has unknown stage: {current_stage}")
+    if STAGE_RANK[target_stage] <= STAGE_RANK[current_stage]:
+        raise ValueError(f"target stage must advance packet forward from {current_stage}")
+
+    clean_task = str(packet.get("task") or "").strip()
+    if not clean_task:
+        raise ValueError("task must not be empty")
+
+    agent_id = str(packet.get("agent_id") or "codex").lower().strip()
+    if agent_id not in AGENTS:
+        raise ValueError(f"unknown agent lane: {agent_id}")
+
+    packet_json = _packet_json_path(repo, str(packet.get("packet_id") or packet_id))
+    packet_dir = packet_json.parent
+    packet_md = packet_dir / "task-packet.md"
+    history_path = packet_history_path(packet_dir)
+    updated_at = datetime.now(timezone.utc).isoformat()
+    created_at = str(packet.get("created_at") or updated_at)
+
+    evidence_requested = bool(
+        attach_evidence or packet.get("attach_evidence") or target_stage == "record"
+    )
+    integrations = detect_integrations(repo)
+    gates = _run_gates(repo, clean_task, evidence_requested, integrations, packet_dir)
+    lane = _lane_assignment(agent_id, target_stage)
+    gate_run = _gate_run_summary(target_stage, gates, evidence_requested)
+    execution_boundary = _execution_boundary(target_stage, lane, gate_run)
+    handoff = _handoff_summary(
+        target_stage,
+        lane,
+        gates,
+        gate_run,
+        execution_boundary,
+        evidence_requested,
+    )
+    status = _packet_status(target_stage, gates, evidence_requested)
+    history = [event for event in packet.get("history", []) if isinstance(event, dict)]
+    if not history:
+        history = [
+            _history_event(
+                event="created",
+                at=created_at,
+                stage=current_stage,
+                status=str(packet.get("status") or "unknown"),
+                summary="Recovered creation event from packet metadata.",
+                attach_evidence=bool(packet.get("attach_evidence")),
+            )
+        ]
+    history.append(
+        _history_event(
+            event="advanced",
+            at=updated_at,
+            stage=target_stage,
+            status=status,
+            summary=f"Advanced packet from {current_stage} to {target_stage} using local gates.",
+            attach_evidence=evidence_requested,
+            from_stage=current_stage,
+            to_stage=target_stage,
+        )
+    )
+
+    packet_obj = TaskPacket(
+        packet_id=str(packet.get("packet_id") or packet_id),
+        created_at=created_at,
+        updated_at=updated_at,
+        repo=str(repo),
+        agent_id=agent_id,
+        agent_name=AGENTS[agent_id],
+        lane=lane,
+        task=clean_task,
+        stage=target_stage,
+        status=status,
+        attach_evidence=evidence_requested,
+        gates=gates,
+        gate_run=gate_run,
+        execution_boundary=execution_boundary,
+        handoff=handoff,
+        history=history,
+        packet_dir=str(packet_dir),
+        files={
+            "json": str(packet_json),
+            "markdown": str(packet_md),
+            "history": str(history_path),
+        },
+    )
+    packet_data = asdict(packet_obj)
+    write_text(history_path, json.dumps(history, indent=2))
+    write_text(packet_json, json.dumps(packet_data, indent=2))
+    write_text(packet_md, build_packet_markdown(packet_obj))
+    write_task_index(repo)
+    return packet_data
 
 
 def load_task_packet(path: Path) -> dict[str, Any]:
@@ -871,9 +1045,12 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
     }
     task = packet.get("task", "")
     handoff_export = (packet.get("exports") or {}).get("handoff_markdown") or {}
+    history = packet.get("history") if isinstance(packet.get("history"), list) else []
+    last_event = history[-1] if history and isinstance(history[-1], dict) else {}
     return {
         "packet_id": packet.get("packet_id"),
         "created_at": packet.get("created_at"),
+        "updated_at": packet.get("updated_at") or packet.get("created_at"),
         "agent_id": packet.get("agent_id"),
         "agent_name": packet.get("agent_name"),
         "lane": lane,
@@ -888,6 +1065,8 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "evidence_status": evidence_gate.get("status", "unknown"),
         "has_handoff_export": bool(handoff_export),
         "handoff_export_filename": handoff_export.get("filename"),
+        "history_count": len(history),
+        "last_event": last_event.get("event"),
         "task_excerpt": task if len(task) <= 140 else f"{task[:137]}...",
         "packet_dir": packet.get("packet_dir"),
     }
@@ -911,7 +1090,7 @@ def _scan_task_packets(repo: Path) -> list[dict[str, Any]]:
             continue
     packets.sort(
         key=lambda packet: (
-            str(packet.get("created_at") or ""),
+            str(packet.get("updated_at") or packet.get("created_at") or ""),
             str(packet.get("packet_id") or ""),
         ),
         reverse=True,
