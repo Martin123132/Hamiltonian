@@ -32,6 +32,12 @@ mainly records a run, it belongs behind the AgentLedger evidence boundary. If it
 routes, gates, budgets, verifies, or hands off work across agents, it belongs in
 Hamiltonian.
 
+Hamiltonian now keeps local lane contracts and route recommendations. The
+operator can still select Codex, OpenClaw, Hermes, or the local runner, but the
+packet records what Hamiltonian recommended, why, and whether the selected lane
+is an override. Route advice is metadata only; it does not authorize remote
+execution.
+
 Hamiltonian is not a remote execution service and not a repo scraper. Prototype
 adapters stay local, degrade safely when missing, and write sanitized metadata
 unless a later operator mode explicitly asks for more.
@@ -75,11 +81,13 @@ The cockpit now persists local task packets under:
 
 Each packet includes an explicit lane assignment and gate-run summary. The lane
 records which adapter was selected and confirms that remote execution stayed off
-in the prototype. The gate run records counts, blocked gates, simulated gates,
-and the next operator action. Execute-stage packets also include an execution
-boundary that can be awaiting approval or blocked while keeping local and remote
-execution off. Handoff-stage packets add a compact operator brief with lane,
-gate, approval, and evidence state in one place.
+in the prototype. The route decision records the recommended lane, the selected
+lane, confidence, reasons, warnings, and the local-only routing policy. The gate
+run records counts, blocked gates, simulated gates, and the next operator
+action. Execute-stage packets also include an execution boundary that can be
+awaiting approval or blocked while keeping local and remote execution off.
+Handoff-stage packets add a compact operator brief with lane, route, gate,
+approval, and evidence state in one place.
 
 Packets can also advance in place. Advancement preserves the packet id and
 packet directory, reruns the local gates for the target stage, updates the

@@ -8,7 +8,7 @@
   </head>
   <body>
     <div class="shell">
-      <aside class="rail" aria-label="Workspace">
+      <aside class="rail" aria-label="Sections">
         <div class="brand">
           <span class="mark">H</span>
           <div>
@@ -16,16 +16,17 @@
             <span>Agent operations</span>
           </div>
         </div>
-        <nav class="nav">
-          <a class="active" href="#cockpit">Cockpit</a>
-          <a href="#agents">Agents</a>
-          <a href="#gates">Gates</a>
-          <a href="#runs">Runs</a>
-          <a href="#tools">Tools</a>
+        <nav class="nav" role="tablist" aria-label="Hamiltonian pages">
+          <a class="active" href="#start" data-page-target="start" role="tab" aria-selected="true">Start</a>
+          <a href="#map" data-page-target="map" role="tab" aria-selected="false">Map</a>
+          <a href="#learn" data-page-target="learn" role="tab" aria-selected="false">Learn</a>
+          <a href="#routes" data-page-target="routes" role="tab" aria-selected="false">Routes</a>
+          <a href="#packets" data-page-target="packets" role="tab" aria-selected="false">Packets</a>
+          <a href="#advanced" data-page-target="advanced" role="tab" aria-selected="false">Advanced</a>
         </nav>
         <div class="rail-foot">
-          <span>Boundary</span>
-          <strong>AgentLedger is optional evidence.</strong>
+          <span>Current rule</span>
+          <strong>Routes advise. Gates decide. Evidence stays optional.</strong>
         </div>
       </aside>
 
@@ -61,43 +62,139 @@
           </div>
         </section>
 
+        <section id="mission-hud" class="mission-hud" aria-label="Current mission objective">
+          <div class="mission-hud-copy">
+            <span id="mission-hud-count">Step 1 of 6</span>
+            <strong id="mission-hud-title">Tell it the job</strong>
+            <p id="mission-hud-body">Write one bounded job, then Hamiltonian will route it through the local gates.</p>
+          </div>
+          <div id="mission-hud-steps" class="mission-hud-steps" aria-label="Mission progress"></div>
+          <div class="mission-hud-actions" aria-label="Mission controls">
+            <button id="mission-hud-action" class="compact-button primary-action" type="button">Focus task</button>
+            <button id="mission-hud-map" class="compact-button" type="button">Map</button>
+            <button id="mission-hud-guide" class="compact-button" type="button">Guide</button>
+          </div>
+        </section>
+
+        <section id="mission-map" class="panel mission-map-panel" aria-label="Mission map" data-pages="start map learn">
+          <div class="map-brief">
+            <div>
+              <p class="eyebrow">Mission map</p>
+              <h2 id="map-title">Start with a packet</h2>
+            </div>
+            <div class="map-current">
+              <span>Current objective</span>
+              <strong id="map-current">Tell it the job</strong>
+              <button id="map-action" class="compact-button" type="button">Focus task</button>
+            </div>
+          </div>
+          <div id="map-path" class="map-path"></div>
+        </section>
+
         <div class="grid">
-          <section id="cockpit" class="panel command-panel">
+          <section id="cockpit" class="panel command-panel" data-pages="start">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Task control</p>
-                <h2>Assign bounded work</h2>
+                <h2 id="cockpit-title">Assign bounded work</h2>
               </div>
+            </div>
+            <div class="mode-switch" role="radiogroup" aria-label="Cockpit mode">
+              <label class="mode-choice">
+                <input type="radio" name="cockpit-mode" value="orchestrate" id="mode-orchestrate" checked />
+                Orchestrate
+              </label>
+              <label class="mode-choice">
+                <input type="radio" name="cockpit-mode" value="recorder" id="mode-recorder" />
+                Flight recorder
+              </label>
+            </div>
+            <div id="lane-control">
+              <label for="agent-select" class="eyebrow lane-label">Lane</label>
               <select id="agent-select" aria-label="Agent lane"></select>
+            </div>
+            <div id="recorder-intro" class="packet-preview" hidden>
+              Flight recorder starts each packet at Record stage with local evidence placeholder.
             </div>
             <textarea
               id="task-input"
               spellcheck="true"
               placeholder="Patch the repo, run the proof, and prepare a handoff."
             ></textarea>
-            <div class="command-row">
+            <div id="orchestrate-tools" class="command-row">
               <button id="draft-button" type="button">Draft packet</button>
               <button id="gate-button" type="button">Gate plan</button>
               <button id="execute-button" type="button">Prepare execute</button>
               <button id="handoff-button" type="button">Handoff</button>
               <button id="record-button" type="button">Attach evidence</button>
             </div>
+            <div id="recorder-tools" class="command-row" hidden>
+              <button id="recorder-button" type="button">Record flight packet</button>
+            </div>
             <div id="packet-preview" class="packet-preview">
               <span>No packet drafted yet.</span>
             </div>
           </section>
 
-          <section id="agents" class="panel">
+          <section id="tutorial" class="panel tutorial-panel" data-pages="start learn">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Agent lanes</p>
-                <h2>Workers behind the cockpit</h2>
+                <p class="eyebrow">Tutorial</p>
+                <h2>Plain-English walkthrough</h2>
+              </div>
+              <span id="tutorial-current" class="text-chip">Start here</span>
+            </div>
+            <div id="tutorial-coach" class="tutorial-coach" aria-live="polite">
+              <div>
+                <span>Coach</span>
+                <strong id="tutorial-coach-title">Tell it the job</strong>
+                <p id="tutorial-coach-body">Start by writing the work as a bounded packet.</p>
+              </div>
+              <div class="tutorial-actions">
+                <button id="tutorial-action" class="compact-button" type="button">Focus task</button>
+                <button id="guide-toggle" class="compact-button" type="button">Guide me</button>
               </div>
             </div>
-            <div id="agent-list" class="lane-list"></div>
+            <ol class="tutorial-steps" aria-label="Hamiltonian walkthrough">
+              <li class="tutorial-step" data-stage="draft">
+                <strong>Tell it the job</strong>
+                <p>Write the work you want done, then save it as a packet.</p>
+              </li>
+              <li class="tutorial-step" data-stage="route">
+                <strong>Choose the worker</strong>
+                <p>Hamiltonian recommends a lane, but the operator can override it.</p>
+              </li>
+              <li class="tutorial-step" data-stage="gate">
+                <strong>Check before moving</strong>
+                <p>Memory, intent, and cost gates run before any execution path exists.</p>
+              </li>
+              <li class="tutorial-step" data-stage="execute">
+                <strong>Prepare the work</strong>
+                <p>Create the manual execution boundary without running the worker.</p>
+              </li>
+              <li class="tutorial-step" data-stage="handoff">
+                <strong>Prepare the handoff</strong>
+                <p>The packet becomes a clear note another operator can inspect.</p>
+              </li>
+              <li class="tutorial-step" data-stage="record">
+                <strong>Add proof when needed</strong>
+                <p>Evidence is attached only when the run needs a recorder packet.</p>
+              </li>
+            </ol>
           </section>
 
-          <section id="gates" class="panel wide">
+          <section id="routes" class="panel" data-pages="routes">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Route control</p>
+                <h2>Live lane recommendations</h2>
+              </div>
+            </div>
+            <div id="route-compass" class="route-compass" aria-live="polite"></div>
+            <div id="route-list" class="route-list"></div>
+          </section>
+
+          <section id="gates" class="panel wide" data-pages="map routes">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Runtime path</p>
@@ -109,17 +206,7 @@
             <div id="gate-list" class="gate-list"></div>
           </section>
 
-          <section id="tools" class="panel">
-            <div class="panel-head">
-              <div>
-                <p class="eyebrow">Tool mesh</p>
-                <h2>Local modules</h2>
-              </div>
-            </div>
-            <div id="integration-list" class="integration-list"></div>
-          </section>
-
-          <section id="runs" class="panel">
+          <section id="runs" class="panel" data-pages="packets">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Task packets</p>
@@ -129,21 +216,71 @@
             <div id="packet-list" class="packet-list"></div>
           </section>
 
-          <section id="packet-detail-panel" class="panel wide">
+          <section id="mission" class="panel" data-pages="map learn packets">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Guided flight path</p>
+                <h2>Mission guidance</h2>
+              </div>
+            </div>
+            <div id="mission-path" class="mission-path"></div>
+            <div id="mission-next" class="mission-note"></div>
+          </section>
+
+          <section id="packet-detail-panel" class="panel wide" data-pages="map packets">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Packet detail</p>
                 <h2 id="packet-detail-title">No packet selected</h2>
               </div>
-              <div class="panel-actions">
-                <span id="packet-detail-status" class="timestamp">Waiting</span>
-                <button id="packet-export-button" class="compact-button" type="button" disabled>Export handoff</button>
+              <div class="packet-command-wrap">
+                <div id="packet-command" class="packet-command" aria-live="polite">
+                  <div>
+                    <span>Next move</span>
+                    <strong id="packet-command-title">No packet selected</strong>
+                    <p id="packet-command-detail">Open or draft a packet.</p>
+                  </div>
+                  <button id="packet-primary-action" class="compact-button primary-action" type="button" disabled>
+                    Select packet
+                  </button>
+                </div>
+                <div id="readiness-strip" class="readiness-strip" aria-live="polite"></div>
+                <div id="readiness-detail" class="readiness-detail" aria-live="polite"></div>
+                <div class="panel-actions" aria-label="Packet actions">
+                  <span id="packet-detail-status" class="timestamp">Waiting</span>
+                  <button id="packet-gate-button" class="compact-button" type="button" disabled>Run gates</button>
+                  <button id="packet-execute-button" class="compact-button" type="button" disabled>Prepare execute</button>
+                  <button id="packet-handoff-button" class="compact-button" type="button" disabled>Prepare handoff</button>
+                  <button id="packet-record-button" class="compact-button" type="button" disabled>Attach evidence</button>
+                  <button id="packet-export-button" class="compact-button" type="button" disabled>Export handoff</button>
+                </div>
               </div>
             </div>
             <div id="packet-detail" class="packet-detail"></div>
           </section>
 
-          <section class="panel">
+          <section id="advanced" class="panel wide advanced-grid" data-pages="advanced">
+            <div>
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Agent lanes</p>
+                  <h2>Workers behind the cockpit</h2>
+                </div>
+              </div>
+              <div id="agent-list" class="lane-list"></div>
+            </div>
+            <div>
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Tool mesh</p>
+                  <h2>Local modules</h2>
+                </div>
+              </div>
+              <div id="integration-list" class="integration-list"></div>
+            </div>
+          </section>
+
+          <section id="next-build" class="panel" data-pages="advanced">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Next build</p>
@@ -154,6 +291,25 @@
           </section>
         </div>
       </main>
+    </div>
+
+    <div id="guide-layer" class="guide-layer" hidden>
+      <section class="guide-card" role="region" aria-label="Hamiltonian guide">
+        <div class="guide-card-head">
+          <span id="guide-step-count">Step 1 of 6</span>
+          <button id="guide-close" class="compact-button" type="button">Close</button>
+        </div>
+        <strong id="guide-title">Tell it the job</strong>
+        <p id="guide-body">Write one bounded job.</p>
+        <div class="guide-progress" aria-hidden="true">
+          <span id="guide-progress-fill"></span>
+        </div>
+        <div class="guide-actions">
+          <button id="guide-back" class="compact-button" type="button">Back</button>
+          <button id="guide-next" class="compact-button" type="button">Next</button>
+          <button id="guide-action" class="compact-button primary-action" type="button">Focus task</button>
+        </div>
+      </section>
     </div>
 
     <script src="/app.js"></script>

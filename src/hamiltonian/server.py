@@ -8,12 +8,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .core import ensure_repo, is_git_repo
+from .integrations import detect_integrations
 from .packets import (
+    AGENTS,
     advance_task_packet,
+    build_route_recommendations,
     create_task_packet,
     export_handoff_markdown,
     get_task_packet,
     list_task_packets,
+    select_task_packet_lane,
 )
 from .runtime import runtime_state_dict
 
@@ -63,6 +68,30 @@ class CockpitHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/routes":
+            try:
+                payload = self._read_json()
+                repo = ensure_repo(Path(payload.get("repo") or str(self.repo)))
+                agent_id = str(payload.get("agent_id") or "codex").lower().strip()
+                if agent_id not in AGENTS:
+                    raise ValueError(f"unknown agent lane: {agent_id}")
+                routes = build_route_recommendations(
+                    task=str(payload.get("task") or ""),
+                    selected_agent_id=agent_id,
+                    git_available=(repo / ".git").exists() and is_git_repo(repo),
+                    integrations=detect_integrations(repo),
+                )
+                self._write_json(
+                    {
+                        "route_recommendations": routes,
+                        "selected_agent_id": agent_id,
+                    }
+                )
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path.startswith("/api/packets/") and parsed.path.endswith("/advance"):
             query = parse_qs(parsed.query)
             repo = Path(query.get("repo", [str(self.repo)])[0])
@@ -76,6 +105,27 @@ class CockpitHandler(SimpleHTTPRequestHandler):
                     packet_id=packet_id,
                     stage=str(payload.get("stage") or ""),
                     attach_evidence=bool(payload.get("attach_evidence", False)),
+                )
+                self._write_json({"packet": packet_to_dict(packet)})
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path.startswith("/api/packets/") and parsed.path.endswith("/lane"):
+            query = parse_qs(parsed.query)
+            repo = Path(query.get("repo", [str(self.repo)])[0])
+            packet_id = unquote(
+                parsed.path.removeprefix("/api/packets/").removesuffix("/lane")
+            ).strip("/")
+            try:
+                payload = self._read_json()
+                packet = select_task_packet_lane(
+                    repo_path=repo,
+                    packet_id=packet_id,
+                    agent_id=str(payload.get("agent_id") or ""),
                 )
                 self._write_json({"packet": packet_to_dict(packet)})
             except ValueError as exc:
@@ -104,12 +154,18 @@ class CockpitHandler(SimpleHTTPRequestHandler):
         try:
             payload = self._read_json()
             repo = Path(payload.get("repo") or str(self.repo))
+            mode = str(payload.get("mode") or "").strip().lower()
+            is_recorder_mode = mode == "recorder"
+            agent_id = "codex" if is_recorder_mode else str(payload.get("agent_id") or "codex")
+            stage = str(payload.get("stage") or "gate").lower().strip()
+            if is_recorder_mode:
+                stage = "record"
             packet = create_task_packet(
                 repo_path=repo,
                 task=str(payload.get("task") or ""),
-                agent_id=str(payload.get("agent_id") or "codex"),
-                stage=str(payload.get("stage") or "gate"),
-                attach_evidence=bool(payload.get("attach_evidence", False)),
+                agent_id=agent_id,
+                stage=stage,
+                attach_evidence=True if is_recorder_mode else bool(payload.get("attach_evidence", False)),
             )
         except ValueError as exc:
             self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)

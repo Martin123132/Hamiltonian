@@ -7,7 +7,7 @@ from typing import Any
 
 from .core import ensure_repo, is_git_repo, run_capture
 from .integrations import IntegrationStatus, detect_integrations
-from .packets import list_task_packets
+from .packets import build_lane_contracts, build_route_recommendations, list_task_packets
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,8 @@ class RuntimeState:
     agents: list[AgentProfile]
     gates: list[RuntimeGate]
     integrations: list[IntegrationStatus]
+    lane_contracts: list[dict[str, Any]]
+    route_recommendations: list[dict[str, Any]]
     lifecycle: list[dict[str, str]]
     recent_packets: list[dict[str, Any]]
     next_actions: list[str]
@@ -176,6 +178,13 @@ def build_runtime_state(repo_path: Path) -> RuntimeState:
         agents=build_agents(git_available),
         gates=build_gates(integrations),
         integrations=integrations,
+        lane_contracts=build_lane_contracts(git_available, integrations),
+        route_recommendations=build_route_recommendations(
+            task="",
+            selected_agent_id="codex",
+            git_available=git_available,
+            integrations=integrations,
+        ),
         lifecycle=build_lifecycle(),
         recent_packets=list_task_packets(repo),
         next_actions=build_next_actions(integrations),

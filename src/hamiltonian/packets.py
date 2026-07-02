@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from .adapters import run_repomori_memory_adapter
-from .core import ensure_repo, write_text
+from .core import ensure_repo, is_git_repo, write_text
 from .integrations import IntegrationStatus, detect_integrations
 
 
@@ -36,6 +36,49 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
     },
 }
 AGENTS: dict[str, str] = {agent_id: lane["name"] for agent_id, lane in LANE_CATALOG.items()}
+
+LANE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "codex": {
+        "boundary": "local implementation lane",
+        "best_for": ["repo edits", "tests", "multi-file implementation", "handoff repair"],
+        "avoid_for": ["unreviewed remote actions", "credential handling"],
+        "evidence_policy": "Attach AgentLedger only when requested.",
+    },
+    "openclaw": {
+        "boundary": "external adapter lane",
+        "best_for": ["third-party agent experiments", "compatibility probes", "operator comparison"],
+        "avoid_for": ["direct execution", "private repo scraping", "credentialed work"],
+        "evidence_policy": "Represent evidence locally until a real adapter is wired.",
+    },
+    "hermes": {
+        "boundary": "external adapter lane",
+        "best_for": ["structured handoff", "agent comparison", "adapter proving"],
+        "avoid_for": ["direct execution", "private repo scraping", "credentialed work"],
+        "evidence_policy": "Represent evidence locally until a real adapter is wired.",
+    },
+    "local": {
+        "boundary": "local command lane",
+        "best_for": ["small scripts", "shell checks", "test commands", "repo inspection"],
+        "avoid_for": ["large autonomous edits", "remote actions", "unsafe destructive commands"],
+        "evidence_policy": "Use Hamiltonian reports or AgentLedger when proof matters.",
+    },
+}
+
+CODE_TASK_MARKERS = (
+    "patch",
+    "fix",
+    "implement",
+    "refactor",
+    "test",
+    "tests",
+    "ui",
+    "api",
+    "server",
+    "bug",
+)
+LOCAL_TASK_MARKERS = ("command", "script", "shell", "pytest", "doctor", "compile", "smoke")
+HANDOFF_TASK_MARKERS = ("handoff", "summarize", "brief", "compare", "review", "plan")
+EVIDENCE_TASK_MARKERS = ("record", "evidence", "proof", "audit", "trace")
 
 TASK_INDEX_SCHEMA = "hamiltonian.task-index.v1"
 STAGE_ORDER = ("draft", "gate", "execute", "handoff", "record")
@@ -81,6 +124,21 @@ class LaneAssignment:
     execution: str
     remote_execution: bool
     summary: str
+
+
+@dataclass(frozen=True)
+class RouteDecision:
+    selected_lane_id: str
+    selected_lane_name: str
+    recommended_lane_id: str
+    recommended_lane_name: str
+    status: str
+    confidence: int
+    summary: str
+    reasons: list[str]
+    warnings: list[str]
+    remote_execution: bool
+    policy: str
 
 
 @dataclass(frozen=True)
@@ -131,6 +189,7 @@ class TaskPacket:
     agent_id: str
     agent_name: str
     lane: LaneAssignment
+    route: RouteDecision
     task: str
     stage: str
     status: str
@@ -170,6 +229,12 @@ def _available(integration_by_name: dict[str, IntegrationStatus], name: str) -> 
     return bool(item and item.available)
 
 
+def _route_git_available(repo: Path) -> bool:
+    if not (repo / ".git").exists():
+        return False
+    return is_git_repo(repo)
+
+
 def _has_dangerous_marker(task: str) -> str | None:
     lowered = task.lower()
     for marker in DANGEROUS_MARKERS:
@@ -195,6 +260,175 @@ def _lane_assignment(agent_id: str, stage: str) -> LaneAssignment:
         ),
         remote_execution=False,
         summary=lane["summary"],
+    )
+
+
+def build_lane_contracts(
+    git_available: bool,
+    integrations: list[IntegrationStatus],
+) -> list[dict[str, Any]]:
+    by_name = _integration_by_name(integrations)
+    contracts: list[dict[str, Any]] = []
+    for lane_id, lane in LANE_CATALOG.items():
+        contract = LANE_CONTRACTS[lane_id]
+        external = lane["kind"] == "external-agent-adapter"
+        status = "adapter-boundary" if external else "ready"
+        if lane_id == "codex" and not git_available:
+            status = "limited"
+        contracts.append(
+            {
+                "id": lane_id,
+                "name": lane["name"],
+                "kind": lane["kind"],
+                "status": status,
+                "boundary": contract["boundary"],
+                "best_for": list(contract["best_for"]),
+                "avoid_for": list(contract["avoid_for"]),
+                "required_gates": ["memory", "intent", "cost"],
+                "remote_execution": False,
+                "evidence_policy": contract["evidence_policy"],
+                "adapter_ready": not external,
+                "memory_available": _available(by_name, "RepoMori"),
+            }
+        )
+    return contracts
+
+
+def _contains_any(task: str, markers: tuple[str, ...]) -> bool:
+    lowered = task.lower()
+    return any(marker in lowered for marker in markers)
+
+
+def build_route_recommendations(
+    task: str = "",
+    selected_agent_id: str | None = None,
+    git_available: bool = True,
+    integrations: list[IntegrationStatus] | None = None,
+) -> list[dict[str, Any]]:
+    integrations = integrations or []
+    selected = (selected_agent_id or "").lower().strip()
+    code_task = _contains_any(task, CODE_TASK_MARKERS)
+    local_task = _contains_any(task, LOCAL_TASK_MARKERS)
+    handoff_task = _contains_any(task, HANDOFF_TASK_MARKERS)
+    evidence_task = _contains_any(task, EVIDENCE_TASK_MARKERS)
+    risky_marker = _has_dangerous_marker(task)
+
+    base_scores = {"codex": 82, "local": 70, "hermes": 54, "openclaw": 52}
+    recommendations: list[dict[str, Any]] = []
+    for lane_id, lane in LANE_CATALOG.items():
+        external = lane["kind"] == "external-agent-adapter"
+        score = base_scores[lane_id]
+        reasons = [LANE_CONTRACTS[lane_id]["boundary"]]
+        warnings: list[str] = []
+
+        if lane_id == "codex":
+            if git_available:
+                reasons.append("repo-aware local implementation lane")
+            else:
+                score -= 8
+                warnings.append("Git metadata is unavailable for this workspace.")
+            if code_task:
+                score += 12
+                reasons.append("task looks like implementation or verification work")
+            if local_task and not code_task:
+                score -= 6
+                reasons.append("task looks like a small local command, so the local runner may be cleaner")
+            if evidence_task:
+                score += 4
+        elif lane_id == "local":
+            if local_task:
+                score += 13
+                reasons.append("task looks like a bounded local command or smoke check")
+            if code_task:
+                score -= 4
+            if evidence_task:
+                score += 3
+        elif lane_id == "hermes":
+            if handoff_task:
+                score += 8
+                reasons.append("task includes handoff, review, or structured comparison language")
+        elif lane_id == "openclaw":
+            if "openclaw" in task.lower() or "open claw" in task.lower():
+                score += 8
+                reasons.append("task explicitly references OpenClaw")
+
+        if selected == lane_id:
+            score += 3
+            reasons.append("operator selected this lane")
+
+        if external:
+            score = min(score, 66)
+            warnings.append("Adapter is represented locally; remote execution is off.")
+        if risky_marker:
+            score = min(score, 60)
+            warnings.append(f"Intent gate must clear risky marker `{risky_marker}` before execution.")
+
+        recommendations.append(
+            {
+                "lane_id": lane_id,
+                "lane_name": lane["name"],
+                "rank": 0,
+                "score": max(1, min(99, score)),
+                "status": "available",
+                "summary": LANE_CATALOG[lane_id]["summary"],
+                "reasons": reasons,
+                "warnings": warnings,
+                "remote_execution": False,
+                "selected": selected == lane_id,
+            }
+        )
+
+    recommendations.sort(key=lambda item: (-int(item["score"]), str(item["lane_id"])))
+    for index, item in enumerate(recommendations, start=1):
+        item["rank"] = index
+        if index == 1:
+            item["status"] = "recommended"
+        elif item["warnings"]:
+            item["status"] = "review"
+    return recommendations
+
+
+def recommend_route(
+    task: str,
+    selected_agent_id: str,
+    git_available: bool,
+    integrations: list[IntegrationStatus],
+) -> RouteDecision:
+    selected = selected_agent_id.lower().strip()
+    recommendations = build_route_recommendations(
+        task=task,
+        selected_agent_id=selected,
+        git_available=git_available,
+        integrations=integrations,
+    )
+    top = recommendations[0]
+    selected_item = next(
+        (item for item in recommendations if item["lane_id"] == selected),
+        top,
+    )
+    recommended_id = str(top["lane_id"])
+    status = "recommended" if selected == recommended_id else "operator-override"
+    warnings = list(selected_item["warnings"])
+    if status == "operator-override":
+        warnings.append(
+            f"Hamiltonian recommends {top['lane_name']} first, but will keep the operator-selected lane."
+        )
+
+    return RouteDecision(
+        selected_lane_id=selected,
+        selected_lane_name=AGENTS[selected],
+        recommended_lane_id=recommended_id,
+        recommended_lane_name=str(top["lane_name"]),
+        status=status,
+        confidence=int(top["score"]),
+        summary=(
+            f"Recommended {top['lane_name']} for this packet; "
+            f"selected lane is {AGENTS[selected]}."
+        ),
+        reasons=list(top["reasons"]),
+        warnings=warnings,
+        remote_execution=False,
+        policy="Route advice is local metadata only; no agent or remote runner is executed.",
     )
 
 
@@ -553,6 +787,8 @@ def _history_event(
     attach_evidence: bool,
     from_stage: str | None = None,
     to_stage: str | None = None,
+    from_agent: str | None = None,
+    to_agent: str | None = None,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
         "event": event,
@@ -568,6 +804,10 @@ def _history_event(
         record["from_stage"] = from_stage
     if to_stage is not None:
         record["to_stage"] = to_stage
+    if from_agent is not None:
+        record["from_agent"] = from_agent
+    if to_agent is not None:
+        record["to_agent"] = to_agent
     return record
 
 
@@ -582,6 +822,7 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         f"- Agent: `{packet.agent_name}`",
         f"- Lane kind: `{packet.lane.kind}`",
         f"- Lane execution: `{packet.lane.execution}`",
+        f"- Route: `{packet.route.status}`",
         f"- Stage: `{packet.stage}`",
         f"- Status: **{packet.status.upper()}**",
         f"- Evidence requested: `{packet.attach_evidence}`",
@@ -598,6 +839,15 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         f"- Status: `{packet.lane.status}`",
         f"- Remote execution: `{packet.lane.remote_execution}`",
         f"- Summary: {packet.lane.summary}",
+        "",
+        "## Route Decision",
+        "",
+        f"- Recommended: `{packet.route.recommended_lane_name}`",
+        f"- Selected: `{packet.route.selected_lane_name}`",
+        f"- Confidence: `{packet.route.confidence}`",
+        f"- Remote execution: `{packet.route.remote_execution}`",
+        f"- Summary: {packet.route.summary}",
+        f"- Policy: {packet.route.policy}",
         "",
         "## Gates",
     ]
@@ -686,6 +936,7 @@ def create_task_packet(
 
     evidence_requested = bool(attach_evidence or normalized_stage == "record")
     integrations = detect_integrations(repo)
+    route = recommend_route(clean_task, normalized_agent, _route_git_available(repo), integrations)
     gates = (
         _pending_gates()
         if normalized_stage == "draft"
@@ -724,6 +975,7 @@ def create_task_packet(
         agent_id=normalized_agent,
         agent_name=AGENTS[normalized_agent],
         lane=lane,
+        route=route,
         task=clean_task,
         stage=normalized_stage,
         status=status,
@@ -784,6 +1036,7 @@ def advance_task_packet(
         attach_evidence or packet.get("attach_evidence") or target_stage == "record"
     )
     integrations = detect_integrations(repo)
+    route = recommend_route(clean_task, agent_id, _route_git_available(repo), integrations)
     gates = _run_gates(repo, clean_task, evidence_requested, integrations, packet_dir)
     lane = _lane_assignment(agent_id, target_stage)
     gate_run = _gate_run_summary(target_stage, gates, evidence_requested)
@@ -830,8 +1083,124 @@ def advance_task_packet(
         agent_id=agent_id,
         agent_name=AGENTS[agent_id],
         lane=lane,
+        route=route,
         task=clean_task,
         stage=target_stage,
+        status=status,
+        attach_evidence=evidence_requested,
+        gates=gates,
+        gate_run=gate_run,
+        execution_boundary=execution_boundary,
+        handoff=handoff,
+        history=history,
+        packet_dir=str(packet_dir),
+        files={
+            "json": str(packet_json),
+            "markdown": str(packet_md),
+            "history": str(history_path),
+        },
+    )
+    packet_data = asdict(packet_obj)
+    write_text(history_path, json.dumps(history, indent=2))
+    write_text(packet_json, json.dumps(packet_data, indent=2))
+    write_text(packet_md, build_packet_markdown(packet_obj))
+    write_task_index(repo)
+    return packet_data
+
+
+def select_task_packet_lane(
+    repo_path: Path,
+    packet_id: str,
+    agent_id: str,
+) -> dict[str, Any]:
+    repo = ensure_repo(repo_path)
+    normalized_agent = agent_id.lower().strip()
+    if normalized_agent not in AGENTS:
+        raise ValueError(f"unknown agent lane: {agent_id}")
+
+    packet = get_task_packet(repo, packet_id)
+    current_stage = str(packet.get("stage") or "draft").lower().strip()
+    if current_stage not in STAGES:
+        raise ValueError(f"packet has unknown stage: {current_stage}")
+
+    clean_task = str(packet.get("task") or "").strip()
+    if not clean_task:
+        raise ValueError("task must not be empty")
+
+    packet_json = _packet_json_path(repo, str(packet.get("packet_id") or packet_id))
+    packet_dir = packet_json.parent
+    packet_md = packet_dir / "task-packet.md"
+    history_path = packet_history_path(packet_dir)
+    updated_at = datetime.now(timezone.utc).isoformat()
+    created_at = str(packet.get("created_at") or updated_at)
+    previous_agent = str(packet.get("agent_id") or "codex").lower().strip()
+    if previous_agent not in AGENTS:
+        previous_agent = "codex"
+
+    evidence_requested = bool(packet.get("attach_evidence") or current_stage == "record")
+    integrations = detect_integrations(repo)
+    route = recommend_route(
+        clean_task,
+        normalized_agent,
+        _route_git_available(repo),
+        integrations,
+    )
+    gates = (
+        _pending_gates()
+        if current_stage == "draft"
+        else _run_gates(repo, clean_task, evidence_requested, integrations, packet_dir)
+    )
+    lane = _lane_assignment(normalized_agent, current_stage)
+    gate_run = _gate_run_summary(current_stage, gates, evidence_requested)
+    execution_boundary = _execution_boundary(current_stage, lane, gate_run)
+    handoff = _handoff_summary(
+        current_stage,
+        lane,
+        gates,
+        gate_run,
+        execution_boundary,
+        evidence_requested,
+    )
+    status = _packet_status(current_stage, gates, evidence_requested)
+    history = [event for event in packet.get("history", []) if isinstance(event, dict)]
+    if not history:
+        history = [
+            _history_event(
+                event="created",
+                at=created_at,
+                stage=current_stage,
+                status=str(packet.get("status") or "unknown"),
+                summary="Recovered creation event from packet metadata.",
+                attach_evidence=bool(packet.get("attach_evidence")),
+            )
+        ]
+    history.append(
+        _history_event(
+            event="lane-selected",
+            at=updated_at,
+            stage=current_stage,
+            status=status,
+            summary=(
+                f"Changed packet lane from {AGENTS[previous_agent]} to "
+                f"{AGENTS[normalized_agent]} using local route metadata."
+            ),
+            attach_evidence=evidence_requested,
+            from_agent=previous_agent,
+            to_agent=normalized_agent,
+        )
+    )
+
+    packet_obj = TaskPacket(
+        packet_id=str(packet.get("packet_id") or packet_id),
+        created_at=created_at,
+        updated_at=updated_at,
+        repo=str(repo),
+        agent_id=normalized_agent,
+        agent_name=AGENTS[normalized_agent],
+        lane=lane,
+        route=route,
+        task=clean_task,
+        stage=current_stage,
         status=status,
         attach_evidence=evidence_requested,
         gates=gates,
@@ -893,6 +1262,7 @@ def _packet_json_path(repo: Path, packet_id: str) -> Path:
 
 def build_sanitized_handoff_export(packet: dict[str, Any], exported_at: str) -> str:
     lane = packet.get("lane", {})
+    route = packet.get("route", {})
     gate_run = packet.get("gate_run", {})
     execution = packet.get("execution_boundary", {})
     handoff = packet.get("handoff", {})
@@ -909,12 +1279,21 @@ def build_sanitized_handoff_export(packet: dict[str, Any], exported_at: str) -> 
         f"- Status: `{_sanitize_handoff_text(packet.get('status'))}`",
         f"- Agent: `{_sanitize_handoff_text(packet.get('agent_name'))}`",
         f"- Lane: `{_sanitize_handoff_text(lane.get('status'))}` / `{_sanitize_handoff_text(lane.get('execution'))}`",
+        f"- Route: `{_sanitize_handoff_text(route.get('status', 'unknown'))}`",
         f"- Remote execution: `{bool(execution.get('remote_execution') or lane.get('remote_execution'))}`",
         f"- Evidence: `{_sanitize_handoff_text(evidence_gate.get('status', 'unknown'))}`",
         "",
         "## Task",
         "",
         _sanitize_handoff_text(packet.get("task")),
+        "",
+        "## Route Decision",
+        "",
+        f"- Recommended: `{_sanitize_handoff_text(route.get('recommended_lane_name', packet.get('agent_name')))}`",
+        f"- Selected: `{_sanitize_handoff_text(route.get('selected_lane_name', packet.get('agent_name')))}`",
+        f"- Confidence: `{int(route.get('confidence', 0) or 0)}`",
+        f"- Remote execution: `{bool(route.get('remote_execution'))}`",
+        f"- Summary: {_sanitize_handoff_text(route.get('summary', 'No route decision recorded.'))}",
         "",
         "## Gate Run",
         "",
@@ -1010,6 +1389,19 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "remote_execution": False,
         "summary": "Legacy packet without lane metadata.",
     }
+    route = packet.get("route") or {
+        "selected_lane_id": packet.get("agent_id"),
+        "selected_lane_name": packet.get("agent_name"),
+        "recommended_lane_id": packet.get("agent_id"),
+        "recommended_lane_name": packet.get("agent_name"),
+        "status": "legacy",
+        "confidence": 0,
+        "summary": "Legacy packet without route metadata.",
+        "reasons": [],
+        "warnings": [],
+        "remote_execution": False,
+        "policy": "Legacy packet; review details before use.",
+    }
     gate_run = packet.get("gate_run") or {
         "status": packet.get("status", "unknown"),
         "total": len(gates),
@@ -1054,6 +1446,7 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "agent_id": packet.get("agent_id"),
         "agent_name": packet.get("agent_name"),
         "lane": lane,
+        "route": route,
         "stage": packet.get("stage"),
         "status": packet.get("status"),
         "attach_evidence": packet.get("attach_evidence", False),
