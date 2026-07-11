@@ -11,6 +11,14 @@ from uuid import uuid4
 from .adapters import run_repomori_memory_adapter
 from .core import ensure_repo, is_git_repo, write_text
 from .integrations import IntegrationStatus, detect_integrations
+from .runners import (
+    RunnerPlan,
+    RunnerRequest,
+    read_latest_runner_state,
+    runner_adapter_for_lane,
+    runner_plan_from_dict,
+    runner_plan_state,
+)
 
 
 LANE_CATALOG: dict[str, dict[str, str]] = {
@@ -197,6 +205,7 @@ class TaskPacket:
     gates: list[GateResult]
     gate_run: GateRunSummary
     execution_boundary: ExecutionBoundary
+    runner_plan: RunnerPlan
     handoff: HandoffSummary
     history: list[dict[str, Any]]
     packet_dir: str
@@ -428,7 +437,10 @@ def recommend_route(
         reasons=list(top["reasons"]),
         warnings=warnings,
         remote_execution=False,
-        policy="Route advice is local metadata only; no agent or remote runner is executed.",
+        policy=(
+            "Route advice is local metadata only and never launches an agent. "
+            "Execution requires a separate operator action; remote execution stays off."
+        ),
     )
 
 
@@ -489,7 +501,7 @@ def _gate_run_summary(stage: str, gates: list[GateResult], attach_evidence: bool
         next_action = "Review warnings, then keep work bounded before execution."
     elif stage == "execute":
         status = "execution-ready"
-        next_action = "Operator approval is required before any future runner can execute this packet."
+        next_action = "Operator approval is required before the bounded local runner can execute this packet."
     elif stage == "handoff":
         status = "handoff-ready"
         next_action = "Review the handoff summary before assigning the next operator or runner."
@@ -518,6 +530,7 @@ def _execution_boundary(
     stage: str,
     lane: LaneAssignment,
     gate_run: GateRunSummary,
+    runner_run: dict[str, Any] | None = None,
 ) -> ExecutionBoundary:
     if stage == "draft":
         return ExecutionBoundary(
@@ -538,7 +551,7 @@ def _execution_boundary(
             local_execution=False,
             remote_execution=False,
             summary="Packet was gated without arming an execution boundary.",
-            next_action="Use Prepare execute to create a dry-run approval boundary.",
+            next_action="Use Prepare execute to create an explicit local approval boundary.",
         )
 
     if gate_run.blocked:
@@ -563,11 +576,33 @@ def _execution_boundary(
             next_action="Review warnings before any future runner can execute this packet.",
         )
 
+    run_status = str((runner_run or {}).get("status") or "not-started")
+    if stage == "handoff" and run_status == "succeeded":
+        return ExecutionBoundary(
+            status="completed",
+            mode="local-codex",
+            approval_required=False,
+            local_execution=True,
+            remote_execution=False,
+            summary="The bounded local Codex run completed before handoff.",
+            next_action="Review the local runner report and prepare the operator handoff.",
+        )
+    if stage == "handoff" and run_status in {"failed", "timed-out", "cancelled", "interrupted"}:
+        return ExecutionBoundary(
+            status="run-failed",
+            mode="local-codex",
+            approval_required=True,
+            local_execution=True,
+            remote_execution=False,
+            summary=f"The bounded local Codex run ended as {run_status}.",
+            next_action="Review or retry the local run before treating the work as complete.",
+        )
+
     mode = "dry-run" if stage == "execute" else "handoff-dry-run"
     next_action = (
-        "Review the handoff packet before a future bounded runner slice can execute."
+        "Review the handoff packet before assigning the next bounded work step."
         if stage == "handoff"
-        else "Operator approval is required before a future bounded runner slice can execute."
+        else "Review the runner plan and explicitly launch the bounded local adapter when ready."
     )
     return ExecutionBoundary(
         status="awaiting-approval",
@@ -575,9 +610,60 @@ def _execution_boundary(
         approval_required=True,
         local_execution=False,
         remote_execution=False,
-        summary=f"{lane.name} is prepared behind Hamiltonian gates; no agent or command executed.",
+        summary=f"{lane.name} is prepared behind Hamiltonian gates; no local run has started yet.",
         next_action=next_action,
     )
+
+
+def _runner_plan(
+    repo: Path,
+    packet_dir: Path,
+    packet_id: str,
+    task: str,
+    stage: str,
+    lane: LaneAssignment,
+    gate_run: GateRunSummary,
+    execution_boundary: ExecutionBoundary,
+    attach_evidence: bool,
+    previous_plan: dict[str, Any] | None = None,
+) -> RunnerPlan:
+    if gate_run.blocked or execution_boundary.status == "blocked":
+        return runner_plan_state(
+            lane_id=lane.id,
+            status="blocked",
+            mode="local-dry-run",
+            summary="Runner plan was not prepared because readiness gates blocked the packet.",
+            next_action="Clear blocked gates before preparing a launch plan.",
+        )
+    if execution_boundary.status == "needs-review":
+        return runner_plan_state(
+            lane_id=lane.id,
+            status="needs-review",
+            mode="local-dry-run",
+            summary="Runner plan is paused until the operator reviews gate warnings.",
+            next_action="Review warnings before preparing a launch plan.",
+        )
+    if stage == "handoff" and execution_boundary.status in {"completed", "run-failed"} and previous_plan:
+        return runner_plan_from_dict(previous_plan)
+    if stage not in {"execute", "handoff"} or execution_boundary.status != "awaiting-approval":
+        return runner_plan_state(
+            lane_id=lane.id,
+            status="not-prepared",
+            mode="inactive",
+            summary="Runner contract is available but no launch plan has been prepared for this stage.",
+            next_action="Run gates, then use Prepare execute to write the local dry-run plan.",
+        )
+
+    request = RunnerRequest(
+        packet_id=packet_id,
+        lane_id=lane.id,
+        repo=repo,
+        task=task,
+        gate_status=gate_run.status,
+        blocked_gate_ids=tuple(gate_run.blocked_gate_ids),
+        attach_evidence=attach_evidence,
+    )
+    return runner_adapter_for_lane(lane.id).prepare(request, packet_dir)
 
 
 def _handoff_summary(
@@ -634,6 +720,22 @@ def _handoff_summary(
             next_action="Review warnings before handing this packet to another operator or runner.",
         )
 
+    if execution_boundary.status == "run-failed":
+        return HandoffSummary(
+            status="needs-review",
+            mode="operator-handoff",
+            ready=False,
+            lane=lane.name,
+            gate_status=gate_run.status,
+            execution_status=execution_boundary.status,
+            evidence_status=evidence_status,
+            includes_evidence=includes_evidence,
+            summary="Handoff is paused because the bounded local run did not succeed.",
+            next_action="Review or retry the local run before handing off this packet as complete.",
+        )
+
+    completed_run = execution_boundary.status == "completed"
+
     return HandoffSummary(
         status="ready",
         mode="operator-handoff",
@@ -643,7 +745,11 @@ def _handoff_summary(
         execution_status=execution_boundary.status,
         evidence_status=evidence_status,
         includes_evidence=includes_evidence,
-        summary="Handoff packet is ready for operator review with no agent or command executed.",
+        summary=(
+            "Handoff packet is ready with a completed bounded local runner result."
+            if completed_run
+            else "Handoff packet is ready for operator review; no local run was started."
+        ),
         next_action="Use this packet as the local handoff brief for the next bounded work step.",
     )
 
@@ -743,7 +849,7 @@ def _run_gates(
         "kind": "local-placeholder",
         "installed": installed,
         "executed": False,
-        "summary": "Evidence was requested, but this prototype slice does not execute agents or shell commands.",
+        "summary": "Evidence was requested; this placeholder does not execute AgentLedger or capture runner output.",
     }
     write_text(evidence_path, json.dumps(evidence_payload, indent=2))
     gates.append(
@@ -764,7 +870,12 @@ def _run_gates(
     return gates
 
 
-def _packet_status(stage: str, gates: list[GateResult], attach_evidence: bool) -> str:
+def _packet_status(
+    stage: str,
+    gates: list[GateResult],
+    attach_evidence: bool,
+    handoff: HandoffSummary | None = None,
+) -> str:
     if any(gate.status == "block" for gate in gates):
         return "blocked"
     if stage == "draft":
@@ -772,6 +883,8 @@ def _packet_status(stage: str, gates: list[GateResult], attach_evidence: bool) -
     if stage == "execute":
         return "execution-ready"
     if stage == "handoff":
+        if handoff is not None and not handoff.ready:
+            return handoff.status
         return "handoff-ready"
     if attach_evidence:
         return "recorded"
@@ -827,6 +940,7 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         f"- Status: **{packet.status.upper()}**",
         f"- Evidence requested: `{packet.attach_evidence}`",
         f"- Execution boundary: `{packet.execution_boundary.status}`",
+        f"- Runner plan: `{packet.runner_plan.status}`",
         f"- Handoff: `{packet.handoff.status}`",
         "",
         "## Task",
@@ -873,6 +987,19 @@ def build_packet_markdown(packet: TaskPacket) -> str:
             f"- Remote execution: `{packet.execution_boundary.remote_execution}`",
             f"- Summary: {packet.execution_boundary.summary}",
             f"- Next action: {packet.execution_boundary.next_action}",
+            "",
+            "## Runner Plan",
+            "",
+            f"- Schema: `{packet.runner_plan.schema}`",
+            f"- Adapter: `{packet.runner_plan.adapter_id}`",
+            f"- Status: `{packet.runner_plan.status}`",
+            f"- Mode: `{packet.runner_plan.mode}`",
+            f"- Lifecycle: `{', '.join(packet.runner_plan.lifecycle)}`",
+            f"- Launch supported: `{packet.runner_plan.launch_supported}`",
+            f"- Local execution: `{packet.runner_plan.local_execution}`",
+            f"- Remote execution: `{packet.runner_plan.remote_execution}`",
+            f"- Summary: {packet.runner_plan.summary}",
+            f"- Next action: {packet.runner_plan.next_action}",
             "",
             "## Handoff",
             "",
@@ -945,6 +1072,17 @@ def create_task_packet(
     lane = _lane_assignment(normalized_agent, normalized_stage)
     gate_run = _gate_run_summary(normalized_stage, gates, evidence_requested)
     execution_boundary = _execution_boundary(normalized_stage, lane, gate_run)
+    runner_plan = _runner_plan(
+        repo=repo,
+        packet_dir=packet_dir,
+        packet_id=packet_id,
+        task=clean_task,
+        stage=normalized_stage,
+        lane=lane,
+        gate_run=gate_run,
+        execution_boundary=execution_boundary,
+        attach_evidence=evidence_requested,
+    )
     handoff = _handoff_summary(
         normalized_stage,
         lane,
@@ -956,7 +1094,14 @@ def create_task_packet(
     packet_json = packet_dir / "task-packet.json"
     packet_md = packet_dir / "task-packet.md"
     history_path = packet_history_path(packet_dir)
-    status = _packet_status(normalized_stage, gates, evidence_requested)
+    status = _packet_status(normalized_stage, gates, evidence_requested, handoff)
+    files = {
+        "json": str(packet_json),
+        "markdown": str(packet_md),
+        "history": str(history_path),
+    }
+    if runner_plan.artifact_path:
+        files["runner_plan"] = runner_plan.artifact_path
     history = [
         _history_event(
             event="created",
@@ -983,14 +1128,11 @@ def create_task_packet(
         gates=gates,
         gate_run=gate_run,
         execution_boundary=execution_boundary,
+        runner_plan=runner_plan,
         handoff=handoff,
         history=history,
         packet_dir=str(packet_dir),
-        files={
-            "json": str(packet_json),
-            "markdown": str(packet_md),
-            "history": str(history_path),
-        },
+        files=files,
     )
     write_text(history_path, json.dumps(history, indent=2))
     write_text(packet_json, json.dumps(asdict(packet), indent=2))
@@ -1040,7 +1182,22 @@ def advance_task_packet(
     gates = _run_gates(repo, clean_task, evidence_requested, integrations, packet_dir)
     lane = _lane_assignment(agent_id, target_stage)
     gate_run = _gate_run_summary(target_stage, gates, evidence_requested)
-    execution_boundary = _execution_boundary(target_stage, lane, gate_run)
+    runner_run = packet.get("runner_run") if isinstance(packet.get("runner_run"), dict) else None
+    if target_stage == "handoff" and str((runner_run or {}).get("status")) in {"starting", "running", "cancelling"}:
+        raise ValueError("cannot prepare handoff while a local runner is active")
+    execution_boundary = _execution_boundary(target_stage, lane, gate_run, runner_run=runner_run)
+    runner_plan = _runner_plan(
+        repo=repo,
+        packet_dir=packet_dir,
+        packet_id=str(packet.get("packet_id") or packet_id),
+        task=clean_task,
+        stage=target_stage,
+        lane=lane,
+        gate_run=gate_run,
+        execution_boundary=execution_boundary,
+        attach_evidence=evidence_requested,
+        previous_plan=packet.get("runner_plan") if isinstance(packet.get("runner_plan"), dict) else None,
+    )
     handoff = _handoff_summary(
         target_stage,
         lane,
@@ -1049,7 +1206,14 @@ def advance_task_packet(
         execution_boundary,
         evidence_requested,
     )
-    status = _packet_status(target_stage, gates, evidence_requested)
+    status = _packet_status(target_stage, gates, evidence_requested, handoff)
+    files = {
+        "json": str(packet_json),
+        "markdown": str(packet_md),
+        "history": str(history_path),
+    }
+    if runner_plan.artifact_path:
+        files["runner_plan"] = runner_plan.artifact_path
     history = [event for event in packet.get("history", []) if isinstance(event, dict)]
     if not history:
         history = [
@@ -1091,14 +1255,11 @@ def advance_task_packet(
         gates=gates,
         gate_run=gate_run,
         execution_boundary=execution_boundary,
+        runner_plan=runner_plan,
         handoff=handoff,
         history=history,
         packet_dir=str(packet_dir),
-        files={
-            "json": str(packet_json),
-            "markdown": str(packet_md),
-            "history": str(history_path),
-        },
+        files=files,
     )
     packet_data = asdict(packet_obj)
     write_text(history_path, json.dumps(history, indent=2))
@@ -1152,7 +1313,20 @@ def select_task_packet_lane(
     )
     lane = _lane_assignment(normalized_agent, current_stage)
     gate_run = _gate_run_summary(current_stage, gates, evidence_requested)
-    execution_boundary = _execution_boundary(current_stage, lane, gate_run)
+    runner_run = packet.get("runner_run") if isinstance(packet.get("runner_run"), dict) else None
+    execution_boundary = _execution_boundary(current_stage, lane, gate_run, runner_run=runner_run)
+    runner_plan = _runner_plan(
+        repo=repo,
+        packet_dir=packet_dir,
+        packet_id=str(packet.get("packet_id") or packet_id),
+        task=clean_task,
+        stage=current_stage,
+        lane=lane,
+        gate_run=gate_run,
+        execution_boundary=execution_boundary,
+        attach_evidence=evidence_requested,
+        previous_plan=packet.get("runner_plan") if isinstance(packet.get("runner_plan"), dict) else None,
+    )
     handoff = _handoff_summary(
         current_stage,
         lane,
@@ -1161,7 +1335,14 @@ def select_task_packet_lane(
         execution_boundary,
         evidence_requested,
     )
-    status = _packet_status(current_stage, gates, evidence_requested)
+    status = _packet_status(current_stage, gates, evidence_requested, handoff)
+    files = {
+        "json": str(packet_json),
+        "markdown": str(packet_md),
+        "history": str(history_path),
+    }
+    if runner_plan.artifact_path:
+        files["runner_plan"] = runner_plan.artifact_path
     history = [event for event in packet.get("history", []) if isinstance(event, dict)]
     if not history:
         history = [
@@ -1206,14 +1387,11 @@ def select_task_packet_lane(
         gates=gates,
         gate_run=gate_run,
         execution_boundary=execution_boundary,
+        runner_plan=runner_plan,
         handoff=handoff,
         history=history,
         packet_dir=str(packet_dir),
-        files={
-            "json": str(packet_json),
-            "markdown": str(packet_md),
-            "history": str(history_path),
-        },
+        files=files,
     )
     packet_data = asdict(packet_obj)
     write_text(history_path, json.dumps(history, indent=2))
@@ -1239,7 +1417,11 @@ def get_task_packet(repo_path: Path, packet_id: str) -> dict[str, Any]:
         raise ValueError("packet id resolved outside task storage")
     if not packet_json.exists():
         raise FileNotFoundError("packet not found")
-    return load_task_packet(packet_json)
+    packet = load_task_packet(packet_json)
+    runner_run = read_latest_runner_state(packet_json.parent)
+    if runner_run is not None:
+        packet["runner_run"] = runner_run
+    return packet
 
 
 def _sanitize_handoff_text(value: Any) -> str:
@@ -1265,6 +1447,8 @@ def build_sanitized_handoff_export(packet: dict[str, Any], exported_at: str) -> 
     route = packet.get("route", {})
     gate_run = packet.get("gate_run", {})
     execution = packet.get("execution_boundary", {})
+    runner_plan = packet.get("runner_plan", {})
+    runner_run = packet.get("runner_run", {})
     handoff = packet.get("handoff", {})
     gates = packet.get("gates", [])
     evidence_gate = next((gate for gate in gates if gate.get("id") == "evidence"), {})
@@ -1311,6 +1495,25 @@ def build_sanitized_handoff_export(packet: dict[str, Any], exported_at: str) -> 
         f"- Remote execution: `{bool(execution.get('remote_execution'))}`",
         f"- Summary: {_sanitize_handoff_text(execution.get('summary'))}",
         f"- Next action: {_sanitize_handoff_text(execution.get('next_action'))}",
+        "",
+        "## Runner Plan",
+        "",
+        f"- Adapter: `{_sanitize_handoff_text(runner_plan.get('adapter_id', 'legacy'))}`",
+        f"- Status: `{_sanitize_handoff_text(runner_plan.get('status', 'unknown'))}`",
+        f"- Mode: `{_sanitize_handoff_text(runner_plan.get('mode', 'unknown'))}`",
+        f"- Launch supported: `{bool(runner_plan.get('launch_supported'))}`",
+        f"- Local execution: `{bool(runner_plan.get('local_execution'))}`",
+        f"- Remote execution: `{bool(runner_plan.get('remote_execution'))}`",
+        f"- Summary: {_sanitize_handoff_text(runner_plan.get('summary', 'No runner plan recorded.'))}",
+        "",
+        "## Local Runner Result",
+        "",
+        f"- Status: `{_sanitize_handoff_text(runner_run.get('status', 'not-started'))}`",
+        f"- Local execution: `{bool(runner_run.get('local_execution'))}`",
+        f"- Remote execution: `{bool(runner_run.get('remote_execution'))}`",
+        f"- Exit code: `{_sanitize_handoff_text(runner_run.get('exit_code'))}`",
+        f"- Timed out: `{bool(runner_run.get('timed_out'))}`",
+        f"- Summary: {_sanitize_handoff_text(runner_run.get('summary', 'No local run result recorded.'))}",
         "",
         "## Handoff",
         "",
@@ -1423,6 +1626,32 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "summary": "Legacy packet without execution-boundary metadata.",
         "next_action": "Review packet details.",
     }
+    runner_plan = packet.get("runner_plan") or {
+        "schema": "hamiltonian.runner-contract.legacy",
+        "adapter_id": f"{lane.get('id') or 'unknown'}-legacy",
+        "lane_id": lane.get("id") or packet.get("agent_id"),
+        "status": "unknown",
+        "mode": "legacy",
+        "lifecycle": [],
+        "approval_required": True,
+        "launch_supported": False,
+        "local_only": True,
+        "local_execution": False,
+        "remote_execution": False,
+        "workspace_name": "",
+        "task_digest": "",
+        "task_length": 0,
+        "artifact_path": None,
+        "summary": "Legacy packet without runner-plan metadata.",
+        "next_action": "Review packet details before any launch.",
+    }
+    runner_run = packet.get("runner_run") or {
+        "schema": "hamiltonian.runner-run.v1",
+        "status": "not-started",
+        "local_execution": False,
+        "remote_execution": False,
+        "summary": "No local runner has started for this packet.",
+    }
     handoff = packet.get("handoff") or {
         "status": "unknown",
         "mode": "legacy",
@@ -1452,6 +1681,8 @@ def packet_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "attach_evidence": packet.get("attach_evidence", False),
         "gate_run": gate_run,
         "execution_boundary": execution_boundary,
+        "runner_plan": runner_plan,
+        "runner_run": runner_run,
         "handoff": handoff,
         "memory_status": memory_gate.get("status", "unknown"),
         "memory_mode": memory_gate.get("mode", "unknown"),
@@ -1536,4 +1767,12 @@ def list_task_packets(repo_path: Path, limit: int = 8) -> list[dict[str, Any]]:
     index = read_task_index(repo)
     if index is None:
         index = write_task_index(repo)
-    return list(index.get("packets", []))[:limit]
+    packets = [dict(item) for item in list(index.get("packets", []))[:limit] if isinstance(item, dict)]
+    for packet in packets:
+        packet_id = str(packet.get("packet_id") or "")
+        if not PACKET_ID_PATTERN.fullmatch(packet_id):
+            continue
+        runner_run = read_latest_runner_state(tasks_root(repo) / packet_id)
+        if runner_run is not None:
+            packet["runner_run"] = runner_run
+    return packets

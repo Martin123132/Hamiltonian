@@ -6,14 +6,32 @@ const state = {
   activePage: "start",
   lastPacket: null,
   selectedPacket: null,
+  lastExport: null,
   routeTimer: null,
   routeRequestSeq: 0,
+  pendingRouteLaneId: null,
   guideOpen: false,
   guideStage: null,
   mapCursorIndex: null,
   mapCursorStage: null,
   readinessFocus: null,
+  packetDetailTab: "overview",
+  runnerPollTimer: null,
+  runnerPollSeq: 0,
+  simplePollTimer: null,
+  simplePollSeq: 0,
+  goalPreviewTimer: null,
+  goalDraft: null,
+  appInfo: null,
+  simpleRun: {
+    status: "idle",
+    title: "Ready",
+    body: "",
+    packetId: null,
+    result: "",
+  },
 };
+const ACTIVE_RUN_STATES = new Set(["starting", "running", "cancelling"]);
 const STAGE_RANK = {
   draft: 0,
   gate: 1,
@@ -63,13 +81,13 @@ const MAP_STEPS = [
   {
     id: "handoff",
     title: "Handoff",
-    anchor: "packet-detail-panel",
+    anchor: "handoff-panel",
     summary: "Turn the packet into an operator-ready brief.",
   },
   {
     id: "record",
     title: "Attach proof",
-    anchor: "mission",
+    anchor: "recorder-panel",
     summary: "Add evidence only when this run needs a recorder packet.",
   },
 ];
@@ -97,21 +115,23 @@ const TUTORIAL_STEPS = {
   handoff: {
     title: "Prepare the handoff",
     body: "Turn the packet into an operator-ready note another person can inspect.",
-    anchor: "packet-detail-panel",
+    anchor: "handoff-panel",
   },
   record: {
     title: "Add proof when needed",
     body: "Attach evidence only when this run needs a recorder packet.",
-    anchor: "packet-detail-panel",
+    anchor: "recorder-panel",
   },
 };
 const TUTORIAL_ORDER = ["draft", "route", "gate", "execute", "handoff", "record"];
-const PAGE_ORDER = ["start", "map", "learn", "routes", "packets", "advanced"];
+const PAGE_ORDER = ["start", "create", "map", "learn", "routes", "gates", "recorder", "handoff", "packets", "advanced"];
 const PAGE_ALIASES = {
-  cockpit: "start",
+  cockpit: "create",
   "mission-map": "map",
   tutorial: "learn",
-  gates: "routes",
+  gates: "gates",
+  "recorder-panel": "recorder",
+  "handoff-panel": "handoff",
   runs: "packets",
   mission: "map",
   "packet-detail-panel": "packets",
@@ -151,6 +171,7 @@ function statusTone(value) {
     lowered.includes("missing") ||
     lowered.includes("failed") ||
     lowered.includes("error") ||
+    lowered.includes("timed-out") ||
     lowered.includes("refuse")
   ) {
     return {
@@ -174,6 +195,9 @@ function statusTone(value) {
   if (
     lowered.includes("pending") ||
     lowered.includes("planned") ||
+    lowered.includes("running") ||
+    lowered.includes("starting") ||
+    lowered.includes("cancelling") ||
     lowered.includes("choose") ||
     lowered.includes("draft") ||
     lowered.includes("loading") ||
@@ -200,6 +224,7 @@ function statusTone(value) {
   if (
     lowered.includes("pass") ||
     lowered.includes("checked") ||
+    lowered.includes("succeed") ||
     lowered.includes("recorded") ||
     lowered.includes("represented")
   ) {
@@ -268,6 +293,7 @@ function currentHashId() {
 function setActivePage(page, options = {}) {
   const activePage = normalizePage(page);
   state.activePage = activePage;
+  document.body.dataset.activePage = activePage;
 
   document.querySelectorAll("[data-pages]").forEach((section) => {
     const visible = splitPages(section.dataset.pages).includes(activePage);
@@ -292,6 +318,10 @@ function setActivePage(page, options = {}) {
       const method = options.replace ? "replaceState" : "pushState";
       window.history[method](null, "", hash);
     }
+  }
+
+  if (activePage === "handoff" && state.data) {
+    renderHandoffExport(state.data);
   }
 }
 
@@ -510,7 +540,7 @@ async function focusFirstRouteAction() {
   setActivePage("routes", { updateHash: true, hash: "#routes" });
   window.scrollTo({ top: 0, behavior: "smooth" });
   await refreshLiveRoutes().catch((error) => console.warn(error));
-  const button = document.querySelector("#route-list .route .compact-button");
+  const button = document.querySelector("#route-confirm-button") || document.querySelector("#route-list .route-select-button");
   if (button) {
     button.focus({ preventScroll: true });
     return;
@@ -835,7 +865,13 @@ function normalizeTutorialStage(stage) {
 
 function guideAnchorForStage(stage, packet) {
   const normalized = normalizeTutorialStage(stage);
-  if (packet?.packet_id && ["gate", "execute", "handoff", "record"].includes(normalized)) {
+  if (packet?.packet_id && normalized === "gate") {
+    return "gates";
+  }
+  if (packet?.packet_id && normalized === "record") {
+    return "recorder-panel";
+  }
+  if (packet?.packet_id && ["execute", "handoff"].includes(normalized)) {
     return "packet-detail-panel";
   }
   return (TUTORIAL_STEPS[normalized] || TUTORIAL_STEPS.draft).anchor;
@@ -849,11 +885,11 @@ function guideTargetForStage(stage, packet) {
   const normalized = normalizeTutorialStage(stage);
   const selectors = {
     draft: ["#task-input", "#cockpit"],
-    route: ["#route-list .route-current", "#route-list .route .compact-button", "#route-list", "#routes"],
-    gate: ["#packet-command", "#packet-gate-button", "#packet-detail-panel"],
+    route: ["#route-confirm-button", "#route-list .lane-option-selected", "#route-list .route-select-button", "#routes"],
+    gate: ["#gate-list .gate-check-row", "#gate-primary-action", "#gates"],
     execute: ["#packet-command", "#packet-execute-button", "#packet-detail-panel"],
     handoff: ["#packet-command", "#packet-handoff-button", "#packet-detail-panel"],
-    record: ["#packet-command", "#packet-record-button", "#packet-detail-panel"],
+    record: ["#recorder-create-button", "#recorder-panel", "#packet-record-button"],
   };
   for (const selector of selectors[normalized] || []) {
     const target = document.querySelector(selector);
@@ -1133,19 +1169,244 @@ function renderLifecycle(data) {
   });
 }
 
-function renderGates(data) {
-  const list = $("#gate-list");
-  clear(list);
-  data.gates.forEach((gate) => {
-    const row = document.createElement("article");
-    row.className = "gate";
+function gateToneName(value) {
+  const lowered = String(value || "").toLowerCase();
+  if (
+    lowered.includes("block") ||
+    lowered.includes("fail") ||
+    lowered.includes("refuse") ||
+    lowered.includes("risk") ||
+    lowered.includes("error")
+  ) {
+    return "blocked";
+  }
+  if (
+    lowered.includes("warn") ||
+    lowered.includes("degraded") ||
+    lowered.includes("partial") ||
+    lowered.includes("pending") ||
+    lowered.includes("waiting") ||
+    lowered.includes("choose") ||
+    lowered.includes("missing") ||
+    lowered.includes("external") ||
+    lowered.includes("not ready")
+  ) {
+    return "warn";
+  }
+  if (
+    lowered.includes("pass") ||
+    lowered.includes("checked") ||
+    lowered.includes("clear") ||
+    lowered.includes("ready") ||
+    lowered.includes("selected") ||
+    lowered.includes("recommended") ||
+    lowered.includes("represented") ||
+    lowered.includes("within")
+  ) {
+    return "safe";
+  }
+  return "optional";
+}
+
+function gateToneLabel(tone) {
+  return {
+    safe: "Clear",
+    warn: "Action",
+    blocked: "Blocked",
+    optional: "Neutral",
+  }[tone] || "Neutral";
+}
+
+function gateDisplayPacket(data) {
+  if (state.selectedPacket?.packet_id) return state.selectedPacket;
+  if (state.lastPacket?.packet_id) return state.lastPacket;
+  return homePacketForDisplay(data);
+}
+
+function renderGateMetrics(items) {
+  const metrics = $("#gate-summary-metrics");
+  if (!metrics) return;
+  clear(metrics);
+  const counts = { safe: 0, warn: 0, blocked: 0, optional: 0 };
+  items.forEach((item) => {
+    counts[gateToneName(item.status)] += 1;
+  });
+  [
+    ["safe", "Clear"],
+    ["warn", "Needs action"],
+    ["blocked", "Blocked"],
+    ["optional", "Optional"],
+  ].forEach(([tone, label]) => {
+    const card = document.createElement("article");
+    card.className = `gate-metric-card gate-tone-${tone}`;
+    const value = document.createElement("strong");
+    value.textContent = String(counts[tone]);
+    const name = document.createElement("span");
+    name.textContent = label;
+    card.append(value, name);
+    metrics.appendChild(card);
+  });
+}
+
+function renderGateSelectedDetail(item) {
+  const detail = $("#gate-selected-detail");
+  if (!detail) return;
+  clear(detail);
+  if (!item) {
+    const empty = document.createElement("p");
+    empty.className = "muted-line";
+    empty.textContent = "Select a readiness check to inspect it.";
+    detail.appendChild(empty);
+    return;
+  }
+  const tone = gateToneName(item.status);
+  detail.dataset.tone = tone;
+
+  const head = document.createElement("div");
+  head.className = "gate-selected-head";
+  const label = document.createElement("span");
+  label.textContent = `${item.label} check`;
+  const title = document.createElement("strong");
+  title.textContent = item.explainerTitle || item.label;
+  head.append(label, title);
+
+  const body = document.createElement("p");
+  body.textContent = item.explainer || item.detail;
+
+  const next = document.createElement("p");
+  next.className = "gate-next";
+  const nextLabel = document.createElement("strong");
+  nextLabel.textContent = "Next: ";
+  const nextText = document.createElement("span");
+  nextText.textContent = item.next || "Review the packet state.";
+  next.append(nextLabel, nextText);
+
+  detail.append(head, pill(gateToneLabel(tone)), body, next);
+}
+
+function gateIssueItems(items) {
+  const blocking = items.filter((item) => ["blocked", "warn"].includes(gateToneName(item.status)));
+  if (blocking.length > 0) return blocking;
+  return items.filter((item) => item.id === "gates" || item.id === "execution").slice(0, 2);
+}
+
+function renderGateRequiredActions(packet, items) {
+  const target = $("#gate-required-actions");
+  if (!target) return;
+  clear(target);
+  const list = document.createElement("ol");
+  list.className = "gate-action-list";
+  const actions = packet ? gateIssueItems(items) : items.slice(0, 2);
+  actions.forEach((item) => {
+    const row = document.createElement("li");
     const title = document.createElement("strong");
-    title.textContent = gate.name;
-    const purpose = document.createElement("p");
-    purpose.textContent = `${gate.purpose} ${gate.integration ? `Module: ${gate.integration}.` : ""}`;
-    row.append(title, purpose, pill(gate.status));
+    title.textContent = item.label;
+    const body = document.createElement("span");
+    body.textContent = item.next || item.detail;
+    row.className = `gate-action-${gateToneName(item.status)}`;
+    row.append(title, body);
     list.appendChild(row);
   });
+  if (!list.children.length) {
+    const row = document.createElement("li");
+    row.className = "gate-action-safe";
+    const title = document.createElement("strong");
+    title.textContent = "No blocking actions";
+    const body = document.createElement("span");
+    body.textContent = "Continue to the next packet step when ready.";
+    row.append(title, body);
+    list.appendChild(row);
+  }
+  target.appendChild(list);
+}
+
+function renderGates(data) {
+  const list = $("#gate-list");
+  if (!list) return;
+  clear(list);
+  const packet = gateDisplayPacket(data);
+  const items = readinessItemsForPacket(packet);
+  const selected = readinessSelectedItem(items);
+  const tones = items.map((item) => gateToneName(item.status));
+  const blocked = tones.filter((tone) => tone === "blocked").length;
+  const warnings = tones.filter((tone) => tone === "warn").length;
+  const clearCount = tones.filter((tone) => tone === "safe").length;
+  const summaryState = blocked > 0 ? "Blocked" : warnings > 0 ? "Action needed" : packet ? "Ready" : "Waiting";
+  const summaryTitle = !packet
+    ? "Open or create a packet"
+    : blocked > 0
+      ? "Packet is blocked by readiness gates"
+      : warnings > 0
+        ? "Packet needs operator attention"
+        : "Packet gates are clear enough to continue";
+  const summaryBody = !packet
+    ? "Hamiltonian needs a packet before route, memory, safety, execution, or evidence checks can move."
+    : blocked > 0
+      ? "Resolve the blocked check before preparing execution, handoff, or evidence."
+      : warnings > 0
+        ? "Review the highlighted checks and complete the next safe action before launch."
+        : `${clearCount}/${items.length} readiness checks are clear or locally represented. Remote execution remains off.`;
+
+  setText("#gate-view-title", packet ? homeTaskTitle(packet) : "No packet selected");
+  setText("#gate-summary-state", summaryState);
+  setText("#gate-summary-title", summaryTitle);
+  setText("#gate-summary-body", summaryBody);
+  renderGateMetrics(items);
+
+  items.forEach((item) => {
+    const tone = gateToneName(item.status);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `gate-check-row gate-tone-${tone}`;
+    row.classList.toggle("gate-check-row-selected", item.id === selected?.id);
+    row.dataset.gateId = item.id;
+    row.dataset.testid = "gate-row";
+    row.setAttribute("aria-pressed", String(item.id === selected?.id));
+    row.setAttribute("aria-controls", "gate-selected-detail");
+
+    const marker = document.createElement("span");
+    marker.className = "gate-check-marker";
+    marker.textContent = gateToneLabel(tone);
+    const body = document.createElement("span");
+    body.className = "gate-check-body";
+    const title = document.createElement("strong");
+    title.textContent = item.label;
+    const detail = document.createElement("span");
+    detail.textContent = item.detail;
+    body.append(title, detail);
+    row.append(marker, body, pill(item.status));
+    row.addEventListener("click", () => {
+      state.readinessFocus = item.id;
+      renderGates(state.data || data);
+    });
+    list.appendChild(row);
+  });
+
+  renderGateSelectedDetail(selected);
+  renderGateRequiredActions(packet, items);
+
+  const primary = $("#gate-primary-action");
+  if (!primary) return;
+  if (!packet) {
+    primary.disabled = false;
+    primary.textContent = "Create packet";
+    primary.onclick = () => revealSection("cockpit");
+    return;
+  }
+  if (!state.selectedPacket?.packet_id || state.selectedPacket.packet_id !== packet.packet_id) {
+    primary.disabled = false;
+    primary.textContent = "Open packet";
+    primary.onclick = () => loadPacketDetail(packet.packet_id).catch((error) => {
+      const status = $("#packet-detail-status");
+      if (status) status.textContent = error.message;
+    });
+    return;
+  }
+  const current = mapStage(packet);
+  const action = mapActionFor(current, packet);
+  primary.disabled = false;
+  primary.textContent = action.label;
+  primary.onclick = () => runMapAction(current, packet);
 }
 
 function renderIntegrations(data) {
@@ -1165,57 +1426,353 @@ function renderIntegrations(data) {
   });
 }
 
+function advancedStatusRow(label, status, detail) {
+  const row = document.createElement("article");
+  row.className = `advanced-status-row gate-tone-${gateToneName(status)}`;
+  const body = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const copy = document.createElement("p");
+  copy.textContent = detail;
+  body.append(title, copy);
+  row.append(body, pill(status));
+  return row;
+}
+
+function integrationByName(data, name) {
+  const needle = String(name || "").toLowerCase();
+  return (data?.integrations || []).find((integration) => String(integration.name || "").toLowerCase().includes(needle));
+}
+
+function renderAdvancedDataSources(data) {
+  const list = $("#advanced-data-sources");
+  if (!list) return;
+  clear(list);
+  const repoMori = integrationByName(data, "RepoMori");
+  const tokenSquash = integrationByName(data, "TokenSquash");
+  const rows = [
+    ["Local filesystem", "connected", `Workspace: ${data.repo_name || data.repo || "local repo"}`],
+    [data.git_available ? "Git repository" : "Git repository", data.git_available ? "connected" : "missing", data.git_available ? "Git metadata available locally." : "This workspace is not reporting git metadata."],
+    ["Knowledge base", repoMori?.available ? "connected" : "degraded", repoMori?.detail || "RepoMori is unavailable; Hamiltonian uses sanitized local fallback data."],
+    ["Context compaction", tokenSquash?.available ? "connected" : "degraded", tokenSquash?.detail || "TokenSquash unavailable; context estimates stay synthetic."],
+  ];
+  rows.forEach(([label, status, detail]) => list.appendChild(advancedStatusRow(label, status, detail)));
+  setText("#advanced-source-count", `${rows.length} sources`);
+}
+
+function renderAdvancedRouteScoring(data) {
+  const routeState = $("#advanced-route-state");
+  const summary = $("#advanced-route-recommendation");
+  const bars = $("#advanced-route-bars");
+  if (!summary || !bars) return;
+  const routes = data?.route_recommendations || [];
+  const topRoute = routes[0] || null;
+  if (routeState) routeState.textContent = topRoute ? "Ready" : "Waiting";
+  clear(summary);
+  clear(bars);
+
+  if (!topRoute) {
+    summary.appendChild(
+      advancedStatusRow(
+        "No route signal",
+        "waiting",
+        "Write a task or refresh cockpit state to generate local route recommendations.",
+      ),
+    );
+    return;
+  }
+
+  const top = document.createElement("article");
+  top.className = "advanced-route-top";
+  const orbit = document.createElement("span");
+  orbit.className = "lane-orbit";
+  orbit.setAttribute("aria-hidden", "true");
+  const body = document.createElement("div");
+  const label = document.createElement("span");
+  label.textContent = "Top recommendation";
+  const title = document.createElement("strong");
+  title.textContent = topRoute.lane_name;
+  const detail = document.createElement("p");
+  detail.textContent = `${topRoute.summary} Remote execution remains off.`;
+  body.append(label, title, detail);
+  top.append(orbit, body, pill(topRoute.status || "recommended"));
+  summary.appendChild(top);
+
+  routes.slice(0, 5).forEach((route) => {
+    const score = Math.max(0, Math.min(100, Number(route.score || 0)));
+    const row = document.createElement("article");
+    row.className = "advanced-route-bar";
+    row.style.setProperty("--advanced-route-score", `${score}%`);
+    const head = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = route.lane_name;
+    const value = document.createElement("span");
+    value.textContent = `${score}`;
+    head.append(name, value);
+    const track = document.createElement("i");
+    track.setAttribute("aria-hidden", "true");
+    const reason = document.createElement("p");
+    reason.textContent = (route.reasons || []).slice(0, 2).join("; ") || "Local route signal.";
+    row.append(head, track, reason);
+    bars.appendChild(row);
+  });
+}
+
+function advancedSettingRow(label, value, detail, status = "ready") {
+  const row = document.createElement("article");
+  row.className = `advanced-setting-row gate-tone-${gateToneName(status)}`;
+  const body = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const copy = document.createElement("p");
+  copy.textContent = detail;
+  body.append(title, copy);
+  const badge = document.createElement("span");
+  badge.className = "advanced-setting-value";
+  badge.textContent = value;
+  row.append(body, badge);
+  return row;
+}
+
+function renderAdvancedStaticSettings(data) {
+  const packet = homePacketForDisplay(data);
+  const evidenceList = $("#advanced-evidence-settings");
+  if (evidenceList) {
+    clear(evidenceList);
+    evidenceList.append(
+      advancedSettingRow(
+        "Default evidence posture",
+        packet?.attach_evidence ? "Recorder" : "Recommended",
+        packet?.attach_evidence
+          ? "Current packet has AgentLedger represented locally."
+          : "Evidence is suggested for most work but not mandatory.",
+        packet?.attach_evidence ? "represented" : "recommended",
+      ),
+      advancedSettingRow("Default trace level", "Standard", "Captures packet history, gates, routes, and local adapter state.", "ready"),
+      advancedSettingRow("Auto-bundle on completion", "Off", "Handoff export remains an explicit operator action.", "off"),
+    );
+  }
+
+  const privacyList = $("#advanced-privacy-settings");
+  if (privacyList) {
+    clear(privacyList);
+    privacyList.append(
+      advancedSettingRow("Data handling", "Local-only", "Mission data, packets, and evidence stay on this machine.", "ready"),
+      advancedSettingRow("Remote execution", "Off", "Adapters may be represented, but no remote agent runner is launched.", "off"),
+      advancedSettingRow("Sanitized export", "Enabled", "Handoff exports avoid local filesystem paths and private workspace details.", "ready"),
+    );
+  }
+
+  const debugList = $("#advanced-debug-settings");
+  if (debugList) {
+    clear(debugList);
+    debugList.append(
+      advancedSettingRow("Debug mode", "Off", "No verbose runtime tracing is enabled from the cockpit.", "off"),
+      advancedSettingRow("Verbose logging", "Off", "The prototype keeps diagnostics minimal unless explicitly exported.", "off"),
+      advancedSettingRow("Export diagnostics", "Manual", "Generate sanitized diagnostics only from an operator action.", "optional"),
+    );
+  }
+
+  const aboutList = $("#advanced-about-settings");
+  if (aboutList) {
+    clear(aboutList);
+    const appInfo = state.appInfo || {};
+    aboutList.append(
+      advancedSettingRow("Hamiltonian", `v${appInfo.version || "unknown"}`, "Local agent operations cockpit.", "ready"),
+      advancedSettingRow("Application surface", appInfo.surface === "desktop" ? "Desktop" : "Browser", "The same local cockpit runs inside the selected application surface.", "ready"),
+      advancedSettingRow("Workspace lock", appInfo.workspace_locked ? "Enforced" : "Session", appInfo.workspace_locked ? "This desktop window is locked to its selected repository." : "The browser cockpit uses its current repository session.", appInfo.workspace_locked ? "ready" : "optional"),
+      advancedSettingRow("Updates", "Manual", "Updates use a verified local build package; no remote updater runs in the background.", "optional"),
+      advancedSettingRow("Crash diagnostics", "Local only", "Sanitized desktop crash reports stay in the selected application data directory.", "ready"),
+    );
+  }
+}
+
+function renderAdvancedSettings(data) {
+  if (!$("#advanced")) return;
+  const installed = (data.integrations || []).filter((integration) => integration.available).length;
+  const totalIntegrations = (data.integrations || []).length;
+  setText("#advanced-integration-count", `${installed}/${totalIntegrations} ok`);
+  setText("#advanced-agent-count", `${(data.agents || []).length} lanes`);
+  setText("#advanced-debug-state", "Off");
+  renderAdvancedDataSources(data);
+  renderAdvancedRouteScoring(data);
+  renderAdvancedStaticSettings(data);
+}
+
+function advancedTabTarget(tabName) {
+  return {
+    integrations: ".advanced-integrations-card",
+    workspace: ".advanced-data-card",
+    privacy: ".advanced-privacy-card",
+    adapters: ".advanced-adapter-card",
+    "route-scoring": ".advanced-route-card",
+    export: "#next-build",
+    debug: ".advanced-debug-card",
+    about: ".advanced-about-card",
+  }[tabName] || ".advanced-data-card";
+}
+
+function initAdvancedSettingsControls() {
+  const tabs = document.querySelectorAll("#advanced-tabs button");
+  tabs.forEach((tab) => {
+    tab.setAttribute("aria-pressed", String(tab.classList.contains("advanced-tab-active")));
+    tab.addEventListener("click", () => {
+      tabs.forEach((button) => {
+        const active = button === tab;
+        button.classList.toggle("advanced-tab-active", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
+      const target = document.querySelector(advancedTabTarget(tab.dataset.advancedTab));
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    });
+  });
+}
+
+function routeBackTarget() {
+  return state.selectedPacket?.packet_id ? "packet-detail-panel" : "cockpit";
+}
+
+function routeSelectionLaneId(routes, activePacket) {
+  const currentLaneId = activePacket?.agent_id || $("#agent-select")?.value || "";
+  const pendingIsValid = routes.some((route) => route.lane_id === state.pendingRouteLaneId);
+  if (pendingIsValid) return state.pendingRouteLaneId;
+  if (routes.some((route) => route.lane_id === currentLaneId)) return currentLaneId;
+  return routes[0]?.lane_id || null;
+}
+
+function routeImpactMetric(label, value, tone = "optional") {
+  const card = document.createElement("article");
+  card.className = `route-impact-metric gate-tone-${tone}`;
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  const span = document.createElement("span");
+  span.textContent = label;
+  card.append(strong, span);
+  return card;
+}
+
+function renderRouteCompass(routes, selectedRoute, activePacket) {
+  const compass = $("#route-compass");
+  const impact = $("#route-impact");
+  if (compass) clear(compass);
+  if (impact) clear(impact);
+  if (!compass || routes.length === 0) return;
+
+  const recommended = routes[0];
+  const selected = selectedRoute || recommended;
+  const isRecommended = selected?.lane_id === recommended?.lane_id;
+  const target = activePacket?.packet_id ? "this packet" : "new packets";
+
+  const orbit = document.createElement("div");
+  orbit.className = "lane-orbit";
+  orbit.setAttribute("aria-hidden", "true");
+  const body = document.createElement("div");
+  body.className = "route-compass-body";
+  const label = document.createElement("span");
+  label.textContent = isRecommended ? "Recommended lane" : "Operator override";
+  const title = document.createElement("strong");
+  title.textContent = selected?.lane_name || "No lane selected";
+  const detail = document.createElement("p");
+  detail.textContent = selected
+    ? `${selected.summary} This selection will apply to ${target}.`
+    : "Choose a lane before continuing.";
+  body.append(label, title, detail);
+  compass.append(orbit, body, pill(isRecommended ? "best fit" : "override"));
+
+  if (impact && selected) {
+    const boundary = selected.remote_execution ? "represented" : "local-only";
+    impact.append(
+      routeImpactMetric("fit", String(selected.score || 0), isRecommended ? "safe" : "warn"),
+      routeImpactMetric("rank", `#${selected.rank || "-"}`, "optional"),
+      routeImpactMetric("boundary", boundary, selected.remote_execution ? "warn" : "safe"),
+    );
+  }
+}
+
 function renderRoutes(data) {
   const list = $("#route-list");
-  const compass = $("#route-compass");
+  const confirm = $("#route-confirm-button");
   clear(list);
-  if (compass) clear(compass);
   const routes = data.route_recommendations || [];
   const activePacket = state.selectedPacket;
+  const selectedLaneId = routeSelectionLaneId(routes, activePacket);
+  const selectedRoute = routes.find((route) => route.lane_id === selectedLaneId) || null;
+  const recommendedRoute = routes[0] || null;
+  state.pendingRouteLaneId = selectedLaneId;
+
+  setText("#route-screen-title", activePacket?.packet_id ? "Select lane for packet" : "Select agent lane");
+  setText("#route-selection-count", `${routes.length} lane${routes.length === 1 ? "" : "s"}`);
+  setText("#route-recommended-badge", recommendedRoute?.status || "Waiting");
+
   if (routes.length === 0) {
     const empty = document.createElement("article");
-    empty.className = "route";
+    empty.className = "route lane-option-card lane-option-empty";
     const title = document.createElement("strong");
     title.textContent = "No route recommendations";
     const detail = document.createElement("p");
     detail.textContent = "Refresh cockpit state to build local lane recommendations.";
     empty.append(title, detail, pill("empty"));
     list.appendChild(empty);
-    if (compass) {
-      const note = document.createElement("p");
-      note.textContent = "No lane signal yet. Write a task or refresh cockpit state.";
-      compass.appendChild(note);
+    renderRouteCompass(routes, null, activePacket);
+    setText("#route-selection-summary", "No lane signal yet. Write a task or refresh cockpit state.");
+    setText("#route-override-title", "No lane available yet");
+    setText("#route-override-body", "Hamiltonian needs a task before it can score local lane recommendations.");
+    if (confirm) {
+      confirm.disabled = true;
+      confirm.textContent = "Confirm lane";
+      confirm.onclick = null;
     }
     return;
   }
 
-  if (compass) {
-    const lead = routes[0];
-    const selected = activePacket?.agent_name || $("#agent-select").selectedOptions[0]?.textContent || "No active lane";
-    const summary = document.createElement("div");
-    const label = document.createElement("span");
-    const title = document.createElement("strong");
-    const detail = document.createElement("p");
-    label.textContent = "Lane compass";
-    title.textContent = `${lead.lane_name} is strongest right now`;
-    detail.textContent = `Active lane: ${selected}. Route advice is local metadata only; gates still decide.`;
-    summary.append(label, title, detail);
-    compass.append(summary, pill(lead.status));
-  }
+  renderRouteCompass(routes, selectedRoute, activePacket);
+
+  const isOverride = selectedRoute && recommendedRoute && selectedRoute.lane_id !== recommendedRoute.lane_id;
+  setText("#route-override-title", isOverride ? "Override selected" : "Recommended lane selected");
+  setText(
+    "#route-override-body",
+    isOverride
+      ? `${selectedRoute.lane_name} is not the top recommendation. The packet will record this as an operator lane override.`
+      : "Hamiltonian recommends this lane from local task metadata. Gates still decide before execution.",
+  );
+  setText(
+    "#route-selection-summary",
+    selectedRoute
+      ? `${selectedRoute.lane_name} is selected. Remote execution remains off.`
+      : "Choose a lane to continue.",
+  );
 
   routes.forEach((route) => {
     const isActivePacketLane = Boolean(activePacket?.packet_id && activePacket.agent_id === route.lane_id);
+    const isSelected = route.lane_id === selectedLaneId;
+    const isRecommended = recommendedRoute?.lane_id === route.lane_id;
     const activeLaneReviewed = isActivePacketLane && packetHasLaneDecision(activePacket);
     const scoreValue = Math.max(0, Math.min(100, Number(route.score || 0)));
     const row = document.createElement("article");
-    row.className = "route";
+    row.className = "route lane-option-card";
     row.classList.toggle("route-current", isActivePacketLane);
+    row.classList.toggle("lane-option-selected", isSelected);
+    row.classList.toggle("lane-option-recommended", isRecommended);
+    row.dataset.routeLaneId = route.lane_id;
+    row.dataset.testid = "route-lane";
     row.style.setProperty("--route-strength", `${scoreValue}%`);
+    row.setAttribute("role", "radio");
+    row.setAttribute("aria-checked", String(isSelected));
+    row.tabIndex = 0;
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      state.pendingRouteLaneId = route.lane_id;
+      renderRoutes(state.data || data);
+    });
+
     const body = document.createElement("div");
     body.className = "route-body";
     const kicker = document.createElement("span");
     kicker.className = "route-kicker";
-    kicker.textContent = `Lane ${route.rank}`;
+    kicker.textContent = isRecommended ? "Recommended lane" : `Lane ${route.rank}`;
     const title = document.createElement("strong");
     title.textContent = route.lane_name;
     const summary = document.createElement("p");
@@ -1224,7 +1781,9 @@ function renderRoutes(data) {
     reasons.textContent = `Why: ${(route.reasons || []).join("; ")}`;
     const boundary = document.createElement("p");
     boundary.className = "route-boundary";
-    boundary.textContent = route.remote_execution ? "Boundary: remote execution represented only." : "Boundary: local-only lane; no remote runner is executed.";
+    boundary.textContent = route.remote_execution
+      ? "Boundary: remote execution represented only."
+      : "Boundary: local-only lane; execution requires a separate operator action.";
     body.append(kicker, title, summary, reasons, boundary);
 
     if (route.warnings && route.warnings.length) {
@@ -1249,27 +1808,45 @@ function renderRoutes(data) {
     const useButton = document.createElement("button");
     useButton.type = "button";
     useButton.className = "compact-button";
-    useButton.textContent = activePacket?.packet_id
-      ? activeLaneReviewed
-        ? "Current lane"
-        : isActivePacketLane
-          ? "Keep lane"
-        : "Use for packet"
-      : "Use lane";
-    useButton.title = activePacket?.packet_id
-      ? `Select ${route.lane_name} for the active packet`
-      : `Select ${route.lane_name}`;
-    useButton.disabled = activeLaneReviewed;
+    useButton.classList.add("route-select-button");
+    useButton.textContent = isSelected ? "Selected" : isActivePacketLane ? "Current" : "Select";
+    useButton.title = `Stage ${route.lane_name} as the lane selection`;
+    useButton.dataset.testid = "select-route-lane";
+    useButton.dataset.laneId = route.lane_id;
     useButton.addEventListener("click", () => {
-      useRouteLane(route, useButton).catch((error) => {
-        const status = $("#packet-detail-status");
-        if (status) status.textContent = error.message;
-      });
+      state.pendingRouteLaneId = route.lane_id;
+      renderRoutes(state.data || data);
     });
     actions.append(score, strength, pill(route.status), useButton);
     row.append(body, actions);
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("button")) return;
+      state.pendingRouteLaneId = route.lane_id;
+      renderRoutes(state.data || data);
+    });
     list.appendChild(row);
   });
+
+  if (confirm) {
+    const selectedIsReviewedCurrent = Boolean(
+      activePacket?.packet_id && activePacket.agent_id === selectedRoute?.lane_id && packetHasLaneDecision(activePacket),
+    );
+    confirm.disabled = !selectedRoute || selectedIsReviewedCurrent;
+    confirm.textContent = selectedIsReviewedCurrent
+      ? "Current lane"
+      : activePacket?.packet_id
+        ? "Confirm lane"
+        : "Use lane for packet";
+    confirm.onclick = selectedRoute
+      ? () => {
+          useRouteLane(selectedRoute, confirm).catch((error) => {
+            const status = $("#packet-detail-status");
+            if (status) status.textContent = error.message;
+            setText("#route-selection-summary", error.message);
+          });
+        }
+      : null;
+  }
 }
 
 async function useRouteLane(route, button) {
@@ -1277,25 +1854,27 @@ async function useRouteLane(route, button) {
   if ([...select.options].some((option) => option.value === route.lane_id)) {
     select.value = route.lane_id;
   }
+  state.pendingRouteLaneId = route.lane_id;
 
   if (!state.selectedPacket?.packet_id || state.cockpitMode === "recorder") {
     state.lastPacket = null;
     renderPacket();
     scheduleLiveRouteUpdate(0);
+    revealSection("cockpit");
     return;
   }
 
   if (button) {
     button.disabled = true;
-    button.textContent = "Selecting...";
+    button.textContent = "Confirming...";
   }
   const packet = await selectPacketLane(route.lane_id);
   state.selectedPacket = packet;
   state.lastPacket = packet;
+  state.pendingRouteLaneId = packet.agent_id;
   await load(state.repo);
   await refreshLiveRoutes().catch((error) => console.warn(error));
-  setActivePage("map", { updateHash: true, hash: "#map" });
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  revealSection("gates");
 }
 
 function routeRequestPayload() {
@@ -1339,6 +1918,9 @@ async function refreshLiveRoutes() {
   if (seq !== state.routeRequestSeq || !state.data) return;
   state.data.route_recommendations = data.route_recommendations || [];
   renderRoutes(state.data);
+  renderMissionHome(state.data);
+  renderCreatePacketScreen(state.data);
+  renderAdvancedSettings(state.data);
 }
 
 function renderRecentPackets(data) {
@@ -1392,8 +1974,16 @@ function renderRecentPackets(data) {
     const memoryMode = packet.memory_mode || "unknown";
     const evidenceStatus = packet.evidence_status || "unknown";
     const route = packet.route || {};
+    const runnerPlan = packet.runner_plan || {
+      status: "unknown",
+      mode: "legacy",
+      launch_supported: false,
+      remote_execution: false,
+    };
     const row = document.createElement("article");
     row.className = "packet";
+    row.dataset.packetId = packet.packet_id;
+    row.dataset.testid = "packet-row";
     const body = document.createElement("div");
     const title = document.createElement("strong");
     title.textContent = `${lane.name} -> ${packet.stage}`;
@@ -1408,6 +1998,8 @@ function renderRecentPackets(data) {
     const localExec = executionBoundary.local_execution ? "local execution armed" : "local execution off";
     const remoteExec = executionBoundary.remote_execution ? "remote execution armed" : "remote execution off";
     execution.textContent = `Execute: ${executionBoundary.status} (${executionBoundary.mode}). ${localExec}; ${remoteExec}.`;
+    const runner = document.createElement("p");
+    runner.textContent = `Runner: ${runnerPlan.status} (${runnerPlan.mode}). Launch ${runnerPlan.launch_supported ? "available" : "disabled"}; remote execution ${runnerPlan.remote_execution ? "on" : "off"}.`;
     const handoffLine = document.createElement("p");
     const handoffReady = handoff.ready ? "ready" : "not ready";
     handoffLine.textContent = `Handoff: ${handoff.status} (${handoff.mode}, ${handoffReady}). Evidence: ${handoff.evidence_status}.`;
@@ -1416,7 +2008,7 @@ function renderRecentPackets(data) {
     const next = document.createElement("p");
     next.className = "packet-next";
     next.textContent = handoff.next_action || executionBoundary.next_action || gateRun.next_action;
-    body.append(title, detail, meta, routeLine, execution, handoffLine, proof, next);
+    body.append(title, detail, meta, routeLine, execution, runner, handoffLine, proof, next);
     const actions = document.createElement("div");
     actions.className = "packet-actions";
     const openButton = document.createElement("button");
@@ -1424,6 +2016,8 @@ function renderRecentPackets(data) {
     openButton.className = "compact-button";
     openButton.textContent = "Open";
     openButton.title = "Open packet detail";
+    openButton.dataset.testid = "open-packet";
+    openButton.dataset.packetId = packet.packet_id;
     openButton.addEventListener("click", () => {
       loadPacketDetail(packet.packet_id).catch((error) => {
         $("#packet-detail-status").textContent = error.message;
@@ -1433,6 +2027,646 @@ function renderRecentPackets(data) {
     row.append(body, actions);
     list.appendChild(row);
   });
+}
+
+function setText(selector, value) {
+  const node = $(selector);
+  if (node) node.textContent = value ?? "";
+}
+
+function formatHomeTime(value) {
+  if (!value) return "Waiting";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function homePacketForDisplay(data) {
+  if (state.selectedPacket?.packet_id) return state.selectedPacket;
+  if (state.lastPacket?.packet_id) return state.lastPacket;
+  return (data?.recent_packets || [])[0] || null;
+}
+
+function homeTaskTitle(packet) {
+  if (!packet) return "No mission packet yet";
+  const task = packet.task || packet.task_excerpt || "Untitled packet";
+  const firstLine = String(task).split(/\r?\n/).find(Boolean) || "Untitled packet";
+  return firstLine.length > 54 ? `${firstLine.slice(0, 51)}...` : firstLine;
+}
+
+function homePacketCode(packet) {
+  if (!packet?.packet_id) return "M-00";
+  const compact = String(packet.packet_id).replace(/[^a-z0-9]/gi, "");
+  return `M-${compact.slice(-4).toUpperCase() || "00"}`;
+}
+
+function homeObjective(packet) {
+  if (!packet) {
+    return "Define the mission, choose a lane, and add evidence when it matters.";
+  }
+  const task = packet.task || packet.task_excerpt || "Review packet details and choose the next safe action.";
+  return task.length > 130 ? `${task.slice(0, 127)}...` : task;
+}
+
+function homeEvidenceOptions(packet) {
+  const evidenceGate = packetGate(packet, "evidence");
+  const evidenceStatus = evidenceGate.status || packet?.evidence_status || "skipped";
+  const attached = Boolean(packet?.attach_evidence) || ["represented", "simulated"].includes(evidenceStatus);
+  const options = [
+    {
+      id: "optional",
+      title: "Optional",
+      body: "Faster outputs, lighter traces.",
+      status: "optional",
+      selected: !packet,
+    },
+    {
+      id: "recommended",
+      title: "Recommended",
+      body: "Balanced evidence for most work. Evidence is not always required.",
+      status: "recommended",
+      selected: Boolean(packet && !attached),
+    },
+    {
+      id: "required",
+      title: "Required",
+      body: "Maximum traceability. All claims must be supported.",
+      status: "required",
+      selected: false,
+    },
+  ];
+  if (attached) {
+    options.push({
+      id: "recorder",
+      title: "Recorder-attached",
+      body: "AgentLedger evidence is represented locally only.",
+      status: evidenceStatus,
+      selected: true,
+    });
+  }
+  return options;
+}
+
+function homeReadinessRows(packet) {
+  if (!packet) {
+    return [
+      { label: "Safety / Intent", status: "pending", detail: "Create a packet first." },
+      { label: "Memory Check", status: "waiting", detail: "RepoMori boundary has not run." },
+      { label: "Cost / Context", status: "waiting", detail: "Local estimate waits for a task." },
+      { label: "Execution Readiness", status: "off", detail: "Remote execution remains off." },
+      { label: "Handoff Readiness", status: "not ready", detail: "No packet to hand off yet." },
+    ];
+  }
+
+  const gates = Object.fromEntries((packet.gates || []).map((gate) => [gate.id, gate]));
+  const gateRun = packet.gate_run || {};
+  const executionBoundary = packet.execution_boundary || {};
+  const handoff = packet.handoff || {};
+  const memory = gates.memory || {};
+  const intent = gates.intent || {};
+  const cost = gates.cost || {};
+  return [
+    {
+      label: "Safety / Intent",
+      status: intent.status || gateRun.status || packet.status || "pending",
+      detail: intent.summary || gateRun.next_action || "Safety gate waits for the packet.",
+    },
+    {
+      label: "Memory Check",
+      status: memory.status || packet.memory_status || "pending",
+      detail: memory.mode ? `RepoMori boundary: ${memory.mode}.` : "RepoMori boundary has not checked yet.",
+    },
+    {
+      label: "Cost / Context",
+      status: cost.status || "pending",
+      detail: cost.summary || "Local cost and context check is synthetic until wired.",
+    },
+    {
+      label: "Execution Readiness",
+      status: executionBoundary.status || "not-prepared",
+      detail: executionBoundary.remote_execution
+        ? "External execution is represented only."
+        : "Remote execution off; manual boundary only.",
+    },
+    {
+      label: "Handoff Readiness",
+      status: handoff.status || "not-prepared",
+      detail: handoff.ready ? "Packet is ready for operator handoff." : handoff.next_action || "Prepare handoff after gates.",
+    },
+  ];
+}
+
+function renderHomeReadiness(packet) {
+  const list = $("#home-readiness-list");
+  if (!list) return;
+  clear(list);
+  homeReadinessRows(packet).forEach((item) => {
+    const row = document.createElement("article");
+    row.className = "home-readiness-row";
+    row.dataset.statusTone = statusClass(item.status);
+    const body = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = item.label;
+    const detail = document.createElement("p");
+    detail.textContent = item.detail;
+    body.append(label, detail);
+    row.append(body, pill(item.status));
+    list.appendChild(row);
+  });
+}
+
+function renderHomeEvidence(packet) {
+  const list = $("#home-evidence-options");
+  if (!list) return;
+  clear(list);
+  homeEvidenceOptions(packet).forEach((option) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `home-evidence-option ${option.selected ? "home-evidence-selected" : ""}`;
+    card.setAttribute("aria-pressed", String(option.selected));
+    card.addEventListener("click", () => {
+      if (option.id === "recorder") {
+        revealSection("packet-detail-panel");
+        return;
+      }
+      if (option.id === "recommended" || option.id === "required") {
+        revealSection(packet?.packet_id ? "packet-detail-panel" : "cockpit");
+      }
+    });
+    const title = document.createElement("strong");
+    title.textContent = option.title;
+    const body = document.createElement("span");
+    body.textContent = option.body;
+    card.append(pill(option.status), title, body);
+    list.appendChild(card);
+  });
+}
+
+function renderHomeLane(data, packet) {
+  const route = (data.route_recommendations || [])[0] || packet?.route || null;
+  const lane = packet?.lane || {};
+  const title = route?.lane_name || route?.recommended_lane_name || lane.name || packet?.agent_name || "No lane selected";
+  const fit = route?.status || (packet ? lane.status || "selected" : "Waiting");
+  const summary =
+    route?.summary ||
+    (packet
+      ? `${title} owns the packet through a local adapter boundary.`
+      : "Write a task to generate a local route recommendation.");
+  setText("#home-lane-title", title);
+  setText("#home-lane-fit", fit);
+  setText("#home-lane-body", summary);
+}
+
+function renderHomeRecentPackets(data) {
+  const list = $("#home-recent-packets");
+  if (!list) return;
+  clear(list);
+  const packets = (data.recent_packets || []).slice(0, 5);
+  if (packets.length === 0) {
+    const empty = document.createElement("article");
+    empty.className = "recent-packet-card recent-packet-empty";
+    const title = document.createElement("strong");
+    title.textContent = "No packets yet";
+    const detail = document.createElement("span");
+    detail.textContent = "Your first mission will appear here.";
+    empty.append(title, detail);
+    list.appendChild(empty);
+    return;
+  }
+
+  packets.forEach((packet) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "recent-packet-card";
+    card.dataset.packetId = packet.packet_id;
+    card.dataset.testid = "home-recent-packet";
+    card.addEventListener("click", () => {
+      loadPacketDetail(packet.packet_id).catch((error) => {
+        const status = $("#packet-detail-status");
+        if (status) status.textContent = error.message;
+      });
+    });
+    const code = document.createElement("span");
+    code.textContent = homePacketCode(packet);
+    const title = document.createElement("strong");
+    title.textContent = homeTaskTitle(packet);
+    const meta = document.createElement("small");
+    meta.textContent = `Updated ${formatHomeTime(packet.updated_at || packet.created_at)}`;
+    const trace = document.createElement("i");
+    trace.setAttribute("aria-hidden", "true");
+    card.append(code, title, meta, trace);
+    list.appendChild(card);
+  });
+}
+
+function setSimpleRunState(status, title, body, options = {}) {
+  state.simpleRun = {
+    ...state.simpleRun,
+    ...options,
+    status,
+    title,
+    body,
+  };
+  renderSimpleRunExperience();
+}
+
+function simpleRunIsActive() {
+  return ["starting", "running", "cancelling"].includes(state.simpleRun.status);
+}
+
+function setSimpleStep(selector, stepState) {
+  const node = $(selector);
+  if (!node) return;
+  node.dataset.state = stepState;
+  node.setAttribute("aria-label", `${node.textContent.trim()}: ${stepState}`);
+}
+
+function renderSimpleRunExperience() {
+  const run = state.simpleRun;
+  const home = $("#mission-home");
+  const statusPanel = $("#simple-run-status");
+  const runButton = $("#simple-run-button");
+  const taskInput = $("#simple-task-input");
+  const openButton = $("#simple-open-packet");
+  const goalButton = $("#simple-goal-button");
+  const result = $("#simple-run-result");
+  const active = simpleRunIsActive();
+  const busyBeforeLaunch = ["saving", "checking"].includes(run.status);
+
+  if (home) home.dataset.packetId = run.packetId || "";
+
+  if (statusPanel) {
+    statusPanel.hidden = run.status === "idle";
+    statusPanel.dataset.status = run.status;
+  }
+  setText("#simple-status-badge", run.status.replaceAll("-", " "));
+  setText("#simple-status-title", run.title);
+  setText("#simple-status-body", run.body);
+
+  if (runButton) {
+    runButton.textContent = active ? (run.status === "cancelling" ? "Stopping..." : "Stop") : "Run locally";
+    runButton.disabled = busyBeforeLaunch || run.status === "cancelling";
+  }
+  if (taskInput) taskInput.disabled = active || busyBeforeLaunch;
+  if (openButton) openButton.disabled = !run.packetId;
+  if (goalButton) goalButton.hidden = !(run.status === "succeeded" && Boolean(run.result));
+
+  const checkState = ["idle", "saving"].includes(run.status)
+    ? run.status === "saving" ? "current" : "waiting"
+    : ["blocked", "error"].includes(run.status) ? "issue" : "done";
+  const runState = ["starting", "running", "cancelling"].includes(run.status)
+    ? "current"
+    : run.status === "succeeded" ? "done"
+      : ["unavailable", "blocked", "failed", "timed-out", "cancelled", "error"].includes(run.status) ? "issue" : "waiting";
+  const doneState = run.status === "succeeded" ? "done" : ["failed", "timed-out", "cancelled", "error"].includes(run.status) ? "issue" : "waiting";
+  setSimpleStep("#simple-step-check", checkState);
+  setSimpleStep("#simple-step-run", runState);
+  setSimpleStep("#simple-step-done", doneState);
+
+  if (result) {
+    result.hidden = !run.result;
+    result.textContent = run.result || "";
+  }
+}
+
+function goalPayload() {
+  return {
+    repo: $("#repo-input").value || state.repo,
+    goal_type: state.goalDraft?.goalType || "maintenance",
+    source_report: state.simpleRun.result || "",
+    source_packet_id: state.simpleRun.packetId || null,
+    expansion_request: $("#goal-expansion-input")?.value.trim() || null,
+    goal_id: state.goalDraft?.preview?.goal_id || state.goalDraft?.saved?.goal_id || null,
+  };
+}
+
+function renderGoalBuilder() {
+  const draft = state.goalDraft || { goalType: "maintenance", preview: null, saved: null };
+  const maintenance = draft.goalType !== "expansion";
+  const maintenanceButton = $("#goal-type-maintenance");
+  const expansionButton = $("#goal-type-expansion");
+  const expansionField = $("#goal-expansion-field");
+  const preview = draft.saved || draft.preview;
+  if (maintenanceButton) {
+    maintenanceButton.classList.toggle("goal-type-selected", maintenance);
+    maintenanceButton.setAttribute("aria-checked", String(maintenance));
+  }
+  if (expansionButton) {
+    expansionButton.classList.toggle("goal-type-selected", !maintenance);
+    expansionButton.setAttribute("aria-checked", String(!maintenance));
+  }
+  if (expansionField) expansionField.hidden = maintenance;
+  setText("#goal-target-label", maintenance ? "Maintenance goal" : "Expansion goal");
+  setText("#goal-objective", preview?.objective || (maintenance ? "Generating maintenance goal..." : "Describe the capability to generate the goal."));
+  const grade = maintenance && preview?.source_grade && preview?.target_grade
+    ? `${preview.source_grade} to ${preview.target_grade}`
+    : maintenance ? "Next step" : "New capability";
+  setText("#goal-grade-change", grade);
+  setText(
+    "#goal-preview",
+    preview?.goal_markdown || (maintenance ? "Generating goal..." : "Describe what should become possible."),
+  );
+  const ready = Boolean(preview?.goal_markdown);
+  ["#goal-copy-button", "#goal-save-button", "#goal-open-codex-button"].forEach((selector) => {
+    const button = $(selector);
+    if (button) button.disabled = !ready;
+  });
+  const reviewButton = $("#goal-review-button");
+  if (reviewButton) reviewButton.hidden = !draft.saved;
+  if (draft.saved) {
+    setText("#goal-dialog-status", `Saved locally as ${draft.saved.goal_id}.`);
+  }
+}
+
+async function refreshGoalPreview() {
+  const payload = goalPayload();
+  if (!payload.source_report) throw new Error("Run a Hamiltonian check before creating a Codex goal.");
+  if (payload.goal_type === "expansion" && !payload.expansion_request) {
+    if (state.goalDraft) {
+      state.goalDraft.preview = null;
+      state.goalDraft.saved = null;
+    }
+    renderGoalBuilder();
+    return;
+  }
+  setText("#goal-dialog-status", "Generating local goal preview...");
+  const response = await fetch("/api/goals/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Could not generate the Codex goal.");
+  state.goalDraft = {
+    goalType: payload.goal_type,
+    preview: data.goal,
+    saved: null,
+  };
+  setText("#goal-dialog-status", "Goal preview stays local until you save or open it.");
+  renderGoalBuilder();
+}
+
+function scheduleGoalPreview(delay = 350) {
+  window.clearTimeout(state.goalPreviewTimer);
+  state.goalPreviewTimer = window.setTimeout(() => {
+    refreshGoalPreview().catch((error) => setText("#goal-dialog-status", error.message));
+  }, delay);
+}
+
+async function ensureGoalSaved() {
+  if (state.goalDraft?.saved) return state.goalDraft.saved;
+  const payload = goalPayload();
+  if (!state.goalDraft?.preview) await refreshGoalPreview();
+  payload.goal_id = state.goalDraft?.preview?.goal_id || payload.goal_id;
+  setText("#goal-dialog-status", "Saving goal locally...");
+  const response = await fetch("/api/goals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Could not save the Codex goal.");
+  state.goalDraft.saved = data.goal;
+  state.goalDraft.preview = data.goal;
+  renderGoalBuilder();
+  return data.goal;
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+async function copyCodexGoal() {
+  const goal = await ensureGoalSaved();
+  await copyText(goal.goal_markdown);
+  setText("#goal-dialog-status", `Copied ${goal.goal_id}. Set it as the goal in the Codex project chat.`);
+}
+
+async function openGoalInCodex() {
+  const goal = await ensureGoalSaved();
+  await copyText(goal.goal_markdown);
+  setText("#goal-dialog-status", "Opening the repository in Codex...");
+  const response = await fetch("/api/codex/open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: goal.repo }),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Could not open the Codex workspace.");
+  setText("#goal-dialog-status", "Repository opened in Codex and the goal is copied. Choose the project chat and paste it.");
+}
+
+async function reviewCompletedGoal() {
+  const goal = await ensureGoalSaved();
+  const taskInput = $("#simple-task-input");
+  if (taskInput) {
+    taskInput.value = goal.review_prompt;
+    taskInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  $("#goal-dialog")?.close();
+  revealSection("mission-home", { instant: true });
+  await runSimpleMission();
+}
+
+function selectGoalType(goalType) {
+  state.goalDraft = {
+    goalType: goalType === "expansion" ? "expansion" : "maintenance",
+    preview: null,
+    saved: null,
+  };
+  renderGoalBuilder();
+  scheduleGoalPreview(0);
+}
+
+function openGoalBuilder() {
+  if (!(state.simpleRun.status === "succeeded" && state.simpleRun.result)) return;
+  state.goalDraft = { goalType: "maintenance", preview: null, saved: null };
+  const expansionInput = $("#goal-expansion-input");
+  if (expansionInput) expansionInput.value = "";
+  renderGoalBuilder();
+  $("#goal-dialog")?.showModal();
+  scheduleGoalPreview(0);
+}
+
+function clearSimplePoll() {
+  window.clearTimeout(state.simplePollTimer);
+  state.simplePollTimer = null;
+}
+
+async function applySimpleRunnerState(packetId, run) {
+  const status = String(run?.status || "failed");
+  if (["starting", "running", "cancelling"].includes(status)) {
+    const title = status === "cancelling" ? "Stopping the job" : "Working on it";
+    setSimpleRunState(status, title, run.summary || "Codex is working inside the local workspace.", {
+      packetId,
+      result: "",
+    });
+    return true;
+  }
+
+  const messages = {
+    succeeded: ["Done", run.summary || "The local job completed."],
+    failed: ["The job failed", run.summary || "Codex stopped with an error."],
+    "timed-out": ["The job took too long", run.summary || "Hamiltonian stopped it at the selected time limit."],
+    cancelled: ["Job stopped", run.summary || "The local job was stopped."],
+    interrupted: ["Job interrupted", run.summary || "The local process ended unexpectedly."],
+  };
+  const [title, body] = messages[status] || ["The job stopped", run?.summary || "No final runner state was returned."];
+  setSimpleRunState(status, title, body, {
+    packetId,
+    result: run?.last_message || "",
+  });
+  await load(state.repo);
+  return false;
+}
+
+async function pollSimpleRunner(packetId, immediate = false) {
+  clearSimplePoll();
+  const sequence = state.simplePollSeq + 1;
+  state.simplePollSeq = sequence;
+  if (!immediate) await new Promise((resolve) => window.setTimeout(resolve, 650));
+  const params = _queryRepoParams();
+  const response = await fetch(`/api/packets/${encodeURIComponent(packetId)}/run?${params.toString()}`);
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not read the local job status.");
+  if (sequence !== state.simplePollSeq || state.simpleRun.packetId !== packetId) return;
+  state.selectedPacket = payload.packet || state.selectedPacket;
+  const keepPolling = await applySimpleRunnerState(packetId, payload.run);
+  if (keepPolling) {
+    state.simplePollTimer = window.setTimeout(() => {
+      pollSimpleRunner(packetId, true).catch((error) => {
+        setSimpleRunState("error", "Could not read job status", error.message, { packetId });
+      });
+    }, 700);
+  }
+}
+
+async function cancelSimpleMission() {
+  const packetId = state.simpleRun.packetId;
+  if (!packetId) return;
+  setSimpleRunState("cancelling", "Stopping the job", "Stopping the local process...", { packetId });
+  const params = _queryRepoParams();
+  const response = await fetch(`/api/packets/${encodeURIComponent(packetId)}/run/cancel?${params.toString()}`, {
+    method: "POST",
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not stop the local job.");
+  await applySimpleRunnerState(packetId, payload.run);
+  if (["starting", "running", "cancelling"].includes(payload.run?.status)) {
+    pollSimpleRunner(packetId).catch((error) => {
+      setSimpleRunState("error", "Could not read job status", error.message, { packetId });
+    });
+  }
+}
+
+async function runSimpleMission() {
+  if (simpleRunIsActive()) {
+    await cancelSimpleMission();
+    return;
+  }
+
+  const taskInput = $("#simple-task-input");
+  const task = taskInput?.value.trim() || "";
+  if (!task) {
+    setSimpleRunState("error", "Write the job first", "Describe the result you want, then press Run locally.", {
+      packetId: null,
+      result: "",
+    });
+    taskInput?.focus();
+    return;
+  }
+
+  clearSimplePoll();
+  state.simplePollSeq += 1;
+  state.goalDraft = null;
+  setHomeCockpitMode("orchestrate");
+  const repo = $("#repo-input").value || state.repo;
+  const attachEvidence = Boolean($("#simple-evidence-toggle")?.checked);
+  const timeoutSeconds = Number.parseInt($("#simple-timeout-input")?.value || "900", 10);
+  setSimpleRunState("saving", "Checking the job", "Saving it locally and running the safety checks...", {
+    packetId: null,
+    result: "",
+  });
+
+  const response = await fetch("/api/packets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      repo,
+      task,
+      agent_id: "codex",
+      stage: "execute",
+      attach_evidence: attachEvidence,
+      mode: "orchestrate",
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not save the local job.");
+  const packet = payload.packet;
+  state.lastPacket = packet;
+  state.selectedPacket = packet;
+  setSimpleRunState("checking", "Checks complete", packet.gate_run?.next_action || "The job passed its local checks.", {
+    packetId: packet.packet_id,
+  });
+
+  if (packet.gate_run?.blocked || packet.status === "blocked") {
+    setSimpleRunState("blocked", "Hamiltonian stopped this job", packet.gate_run?.next_action || "A safety check blocked it.", {
+      packetId: packet.packet_id,
+    });
+    await load(repo);
+    return;
+  }
+
+  if (!packet.runner_plan?.launch_supported) {
+    setSimpleRunState(
+      "unavailable",
+      "Job saved, but Codex could not start",
+      packet.runner_plan?.adapter_detail || "The Codex command is not available on this computer.",
+      { packetId: packet.packet_id },
+    );
+    await load(repo);
+    return;
+  }
+
+  setSimpleRunState("starting", "Starting the job", "Opening Codex inside the local workspace...", {
+    packetId: packet.packet_id,
+  });
+  const params = _queryRepoParams();
+  const launchResponse = await fetch(`/api/packets/${encodeURIComponent(packet.packet_id)}/run?${params.toString()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timeout_seconds: timeoutSeconds }),
+  });
+  const launchPayload = await launchResponse.json();
+  if (!launchResponse.ok || launchPayload.error) throw new Error(launchPayload.error || "Codex could not start the local job.");
+  const keepPolling = await applySimpleRunnerState(packet.packet_id, launchPayload.run);
+  if (keepPolling) await pollSimpleRunner(packet.packet_id);
+}
+
+function renderMissionHome(data) {
+  if (!data) return;
+  const home = $("#mission-home");
+  if (!home) return;
+  home.dataset.packetId = state.simpleRun.packetId || "";
+  setText("#simple-task-count", `${$("#simple-task-input")?.value.length || 0}/600`);
+  renderSimpleRunExperience();
+  renderHomeRecentPackets(data);
 }
 
 function detailRow(label, value) {
@@ -1492,6 +2726,8 @@ function readinessItemsForPacket(packet) {
   const memoryGate = packetGate(packet, "memory");
   const evidenceGate = packetGate(packet, "evidence");
   const executionBoundary = packet.execution_boundary || {};
+  const runnerPlan = packet.runner_plan || {};
+  const runnerRun = runnerRunState(packet);
   const gateTotal = Number(gateRun.total || packet.gates?.length || 0);
   const gateCompleted = Number(gateRun.completed || 0);
   const gateBlocked = Number(gateRun.blocked || 0) > 0;
@@ -1556,15 +2792,23 @@ function readinessItemsForPacket(packet) {
     {
       id: "execution",
       label: "Execution",
-      status: executionBoundary.remote_execution ? "external" : "manual only",
-      detail: executionBoundary.status || "No local or remote execution has been prepared.",
+      status: executionBoundary.remote_execution ? "external" : runnerPlan.status || "manual only",
+      detail: ACTIVE_RUN_STATES.has(runnerRun.status)
+        ? runnerRun.summary
+        : runnerRun.status === "succeeded"
+          ? "The bounded local Codex run completed successfully."
+          : runnerPlan.status === "prepared"
+            ? `${runnerPlan.adapter_id || "Local runner"} prepared; launch ${runnerPlan.launch_supported ? "available" : "disabled"}.`
+            : executionBoundary.status || "No local or remote execution has been prepared.",
       explainerTitle: "Execution is a manual approval boundary",
       explainer: executionBoundary.remote_execution
         ? "This packet is warning that an external execution path is present, so it needs operator review."
-        : "Hamiltonian prepares the approval surface only. It does not run a local command or call a remote agent here.",
+        : "Hamiltonian launches only after an explicit operator action, supervises the local process, and keeps remote command execution off.",
       next:
-        executionBoundary.status === "awaiting-approval"
-          ? "Review the boundary before any manual run."
+        runnerRun.status === "succeeded"
+          ? "Review the result, then prepare handoff."
+          : executionBoundary.status === "awaiting-approval"
+            ? "Review the timeout and explicitly launch when ready."
           : "Prepare execution after gates are clear.",
     },
     {
@@ -1656,6 +2900,170 @@ function renderReadinessStrip(packet) {
   renderReadinessDetail(selected);
 }
 
+function packetDetailCode(packet) {
+  if (!packet?.packet_id) return "M-00";
+  const match = String(packet.packet_id).match(/([a-f0-9]{4,8})$/i);
+  return match ? `M-${match[1].slice(0, 4).toUpperCase()}` : homePacketCode(packet);
+}
+
+function packetStatusRows(packet) {
+  if (!packet) {
+    return [
+      { label: "Packet", status: "empty", detail: "Open or create a mission packet." },
+      { label: "Route", status: "pending", detail: "Lane advice appears after the packet exists." },
+      { label: "Evidence", status: "optional", detail: "AgentLedger stays out until selected." },
+    ];
+  }
+
+  const lane = packet.lane || {};
+  const route = packet.route || {};
+  const gateRun = packet.gate_run || {};
+  const executionBoundary = packet.execution_boundary || {};
+  const runnerPlan = packet.runner_plan || {};
+  const runnerRun = runnerRunState(packet);
+  const handoff = packet.handoff || {};
+  const memoryGate = packetGate(packet, "memory");
+  const evidenceGate = packetGate(packet, "evidence");
+  const gateStatus =
+    Number(gateRun.blocked || 0) > 0
+      ? "blocked"
+      : gateRun.completed && gateRun.total
+        ? `${gateRun.completed}/${gateRun.total} checked`
+        : gateRun.status || "pending";
+
+  return [
+    {
+      label: "Stage",
+      status: packet.stage || "draft",
+      detail: packet.status || "Packet state is local.",
+    },
+    {
+      label: "Route",
+      status: packetRequiresLaneDecision(packet) ? "choose lane" : route.status || lane.status || "selected",
+      detail: route.recommended_lane_name || lane.name || packet.agent_name || "No lane selected.",
+    },
+    {
+      label: "Memory",
+      status: memoryGate.status || packet.memory_status || "pending",
+      detail: memoryGate.mode || packet.memory_mode || "RepoMori boundary waiting.",
+    },
+    {
+      label: "Gates",
+      status: gateStatus,
+      detail: gateRun.next_action || "Run local readiness gates before execution.",
+    },
+    {
+      label: "Execution",
+      status: executionBoundary.remote_execution ? "external" : executionBoundary.status || "manual only",
+      detail: executionBoundary.mode || "No remote agent execution.",
+    },
+    {
+      label: "Runner plan",
+      status: runnerPlan.status || "unknown",
+      detail: runnerPlan.status === "prepared"
+        ? `${runnerPlan.adapter_id || "Local adapter"}; launch ${runnerPlan.launch_supported ? "available" : "disabled"}.`
+        : runnerPlan.next_action || "Prepare execution after gates are clear.",
+    },
+    {
+      label: "Runner run",
+      status: runnerRun.status || "not-started",
+      detail: runnerRun.summary || "No bounded local run recorded.",
+    },
+    {
+      label: "Evidence",
+      status: packet.attach_evidence ? evidenceGate.status || "represented" : "optional",
+      detail: packet.attach_evidence
+        ? "AgentLedger placeholder represented locally."
+        : "AgentLedger stays out unless selected.",
+    },
+    {
+      label: "Handoff",
+      status: handoff.ready ? "ready" : handoff.status || "not ready",
+      detail: handoff.next_action || "Prepare handoff after execution boundary.",
+    },
+  ];
+}
+
+function renderPacketMissionControl(packet) {
+  const statusList = $("#packet-status-list");
+  if (statusList) {
+    clear(statusList);
+    packetStatusRows(packet).forEach((item) => {
+      const row = document.createElement("article");
+      row.className = "packet-status-row";
+      row.dataset.testid = `packet-status-${String(item.label || "status").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+      const body = document.createElement("div");
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      const detail = document.createElement("p");
+      detail.textContent = item.detail;
+      body.append(label, detail);
+      row.append(body, pill(item.status));
+      statusList.appendChild(row);
+    });
+  }
+
+  setText("#detail-packet-title", homeTaskTitle(packet));
+  setText("#detail-packet-stage", packet ? STAGE_LABELS[normalizeStage(packet.stage)]?.title || packet.stage : "Waiting");
+  setText("#detail-packet-objective", packet?.task || "Open a packet to inspect mission state.");
+  setText("#detail-packet-lane", packet?.lane?.name || packet?.agent_name || "No lane selected");
+  setText("#detail-packet-updated", formatHomeTime(packet?.updated_at || packet?.created_at));
+  setText("#detail-packet-code", packetDetailCode(packet));
+  setText("#detail-packet-id", packet?.packet_id ? `Packet ID ${packet.packet_id}` : "Packet ID not selected");
+  setText("#detail-evidence-stamp", packet?.attach_evidence ? "Evidence attached" : "Evidence optional");
+}
+
+function detailPanel(id, title) {
+  const section = document.createElement("section");
+  section.className = `detail-panel-section detail-panel-${id}`;
+  section.dataset.packetPanel = id;
+  section.setAttribute("role", "tabpanel");
+  const heading = document.createElement("div");
+  heading.className = "detail-panel-heading";
+  const eyebrow = document.createElement("span");
+  eyebrow.textContent = "Packet tab";
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  heading.append(eyebrow, strong);
+  section.appendChild(heading);
+  return section;
+}
+
+function applyPacketDetailTab() {
+  const activeTab = state.packetDetailTab || "overview";
+  document.querySelectorAll("[data-packet-tab]").forEach((button) => {
+    const active = button.dataset.packetTab === activeTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-packet-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.packetPanel !== activeTab;
+  });
+}
+
+function initPacketDetailControls() {
+  const backButton = $("#packet-control-back");
+  if (backButton) {
+    backButton.addEventListener("click", () => revealSection("runs"));
+  }
+
+  document.querySelectorAll("[data-packet-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.packetDetailTab = button.dataset.packetTab || "overview";
+      applyPacketDetailTab();
+    });
+  });
+}
+
+function initGateViewControls() {
+  const backButton = $("#gate-back-packet");
+  if (backButton) {
+    backButton.addEventListener("click", () => {
+      revealSection(state.selectedPacket?.packet_id ? "packet-detail-panel" : "runs");
+    });
+  }
+}
+
 function renderPacketDetail(packet) {
   const title = $("#packet-detail-title");
   const status = $("#packet-detail-status");
@@ -1665,8 +3073,12 @@ function renderPacketDetail(packet) {
   const packetExecuteButton = $("#packet-execute-button");
   const packetHandoffButton = $("#packet-handoff-button");
   const packetRecordButton = $("#packet-record-button");
+  const panel = $("#packet-detail-panel");
+  if (panel) panel.dataset.packetId = packet?.packet_id || "";
   clear(detail);
   renderReadinessStrip(packet);
+  renderPacketMissionControl(packet);
+  renderRunnerControl(packet);
 
   if (!packet) {
     title.textContent = "No packet selected";
@@ -1677,12 +3089,26 @@ function renderPacketDetail(packet) {
     if (packetHandoffButton) packetHandoffButton.disabled = true;
     if (packetRecordButton) packetRecordButton.disabled = true;
     updatePacketAdvanceButtons(null);
-    const empty = document.createElement("p");
-    empty.className = "muted-line";
-    empty.textContent = "No packet selected.";
-    detail.appendChild(empty);
+    state.packetDetailTab = "overview";
+    const empty = detailPanel("overview", "No packet selected");
+    const emptyLine = document.createElement("p");
+    emptyLine.className = "muted-line";
+    emptyLine.textContent = "Open a recent packet or create a new one to inspect mission control.";
+    empty.appendChild(emptyLine);
+    ["context", "gates", "evidence", "handoff"].forEach((tab) => {
+      const panel = detailPanel(tab, "Waiting for packet");
+      const line = document.createElement("p");
+      line.className = "muted-line";
+      line.textContent = "This section becomes available after a packet is selected.";
+      panel.appendChild(line);
+      detail.appendChild(panel);
+    });
+    detail.prepend(empty);
+    applyPacketDetailTab();
     renderMissionMap(null);
     renderTutorial(null);
+    renderMissionHome(state.data);
+    if (state.data) renderGates(state.data);
     return;
   }
 
@@ -1693,12 +3119,19 @@ function renderPacketDetail(packet) {
   const gates = packet.gates || [];
   const gateRun = packet.gate_run || {};
   const route = packet.route || {};
+  const runnerPlan = packet.runner_plan || {};
+  const runnerRun = runnerRunState(packet);
   const evidenceGate = gates.find((gate) => gate.id === "evidence") || {};
 
   title.textContent = packet.packet_id || "Packet detail";
   status.textContent = packet.status || "unknown";
   exportButton.disabled = false;
 
+  if (!["overview", "context", "gates", "evidence", "handoff"].includes(state.packetDetailTab)) {
+    state.packetDetailTab = "overview";
+  }
+
+  const overview = detailPanel("overview", "Packet overview");
   const summary = document.createElement("div");
   summary.className = "detail-grid";
   summary.append(
@@ -1708,12 +3141,16 @@ function renderPacketDetail(packet) {
     detailRow("Route", `${route.status || "unknown"} / ${route.recommended_lane_name || packet.agent_name}`),
     detailRow("Gate run", `${gateRun.status || "unknown"} (${gateRun.completed || 0}/${gateRun.total || 0})`),
     detailRow("Execution", `${executionBoundary.status || "unknown"} / ${executionBoundary.mode || "unknown"}`),
+    detailRow("Runner adapter", `${runnerPlan.adapter_id || "unknown"} / ${runnerPlan.launch_supported ? "launch ready" : "launch unavailable"}`),
+    detailRow("Runner result", `${runnerRun.status || "not-started"} / local ${Boolean(runnerRun.local_execution)}`),
     detailRow("Handoff", `${handoff.status || "unknown"} / ${handoff.ready ? "ready" : "not ready"}`),
     detailRow("Evidence", evidenceGate.status || "unknown"),
     detailRow("Export", handoffExport ? `${handoffExport.filename} / sanitized` : "none"),
     detailRow("Remote execution", String(Boolean(executionBoundary.remote_execution || lane.remote_execution)))
   );
+  overview.appendChild(summary);
 
+  const context = detailPanel("context", "Context and route");
   const routeBlock = document.createElement("section");
   routeBlock.className = "detail-block";
   const routeTitle = document.createElement("strong");
@@ -1731,6 +3168,9 @@ function renderPacketDetail(packet) {
   taskBody.textContent = packet.task || "";
   task.append(taskTitle, taskBody);
 
+  context.append(routeBlock, task);
+
+  const handoffPanel = detailPanel("handoff", "Handoff and export");
   const next = document.createElement("section");
   next.className = "detail-block";
   const nextTitle = document.createElement("strong");
@@ -1738,7 +3178,20 @@ function renderPacketDetail(packet) {
   const nextBody = document.createElement("p");
   nextBody.textContent = handoff.next_action || executionBoundary.next_action || gateRun.next_action || "";
   next.append(nextTitle, nextBody);
+  const handoffBlock = document.createElement("section");
+  handoffBlock.className = "detail-block";
+  const handoffTitle = document.createElement("strong");
+  handoffTitle.textContent = "Handoff";
+  const handoffBody = document.createElement("p");
+  handoffBody.textContent = handoffExport
+    ? `${handoffExport.filename} is ready as a sanitized local export.`
+    : handoff.ready
+      ? "Packet is ready for handoff. Export when the operator wants a sanitized note."
+      : handoff.status || "Handoff is waiting for the execution boundary.";
+  handoffBlock.append(handoffTitle, handoffBody);
+  handoffPanel.append(next, handoffBlock);
 
+  const gatesPanel = detailPanel("gates", "Readiness gates");
   const gateList = document.createElement("div");
   gateList.className = "detail-gates";
   gates.forEach((gate) => {
@@ -1751,12 +3204,28 @@ function renderPacketDetail(packet) {
     gateItem.append(gateTitle, gateSummary, pill(gate.status));
     gateList.appendChild(gateItem);
   });
+  gatesPanel.appendChild(gateList);
 
-  detail.append(summary, routeBlock, task, next, gateList);
+  const evidencePanel = detailPanel("evidence", "Evidence posture");
+  const evidenceBlock = document.createElement("section");
+  evidenceBlock.className = "detail-block";
+  const evidenceTitle = document.createElement("strong");
+  evidenceTitle.textContent = packet.attach_evidence ? "Evidence represented" : "Evidence optional";
+  const evidenceBody = document.createElement("p");
+  evidenceBody.textContent = packet.attach_evidence
+    ? "AgentLedger is represented as a local placeholder for this packet. No recorder or remote agent has been executed."
+    : "AgentLedger stays out of this packet unless the operator attaches evidence or uses flight recorder mode.";
+  evidenceBlock.append(evidenceTitle, evidenceBody);
+  evidencePanel.appendChild(evidenceBlock);
+
+  detail.append(overview, context, gatesPanel, evidencePanel, handoffPanel);
+  applyPacketDetailTab();
   updatePacketAdvanceButtons(packet);
   renderMissionMap(packet);
   renderMissionPath(packet);
   renderTutorial(packet);
+  renderMissionHome(state.data);
+  if (state.data) renderGates(state.data);
 }
 
 function renderNextActions(data) {
@@ -1771,13 +3240,28 @@ function renderNextActions(data) {
   });
 }
 
+function updateLocalTime() {
+  const localTime = $("#local-time");
+  if (!localTime) return;
+  localTime.textContent = `${new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })} local time`;
+}
+
 function renderHeader(data) {
   $("#repo-input").value = data.repo;
   $("#repo-name").textContent = data.repo_name;
+  document.title = `Hamiltonian | ${data.repo_name}`;
+  setText("#simple-workspace-name", data.repo_name);
+  const simpleWorkspace = $("#simple-workspace-name");
+  if (simpleWorkspace) simpleWorkspace.title = data.repo;
   $("#git-state").textContent = data.git_available ? "available" : "not a git repo";
   $("#agent-count").textContent = `${data.agents.length} lanes`;
   $("#gate-count").textContent = `${data.gates.length} gates`;
   $("#generated-at").textContent = new Date(data.generated_at).toLocaleString();
+  updateLocalTime();
 }
 
 function renderPacket() {
@@ -1802,6 +3286,614 @@ function renderPacket() {
     body.textContent = ` ${agent}: ${task} ${detail}`;
   }
   preview.append(strong, body);
+  renderCreatePacketScreen(state.data);
+}
+
+function renderCreatePacketScreen(data) {
+  const screen = $("#cockpit");
+  if (!screen) return;
+  const taskInput = $("#task-input");
+  const agentSelect = $("#agent-select");
+  const task = taskInput?.value.trim() || "";
+  const routes = data?.route_recommendations || [];
+  const selectedRoute = routes.find((route) => route.lane_id === agentSelect?.value) || routes[0] || null;
+  const selectedLane = agentSelect?.selectedOptions?.[0]?.textContent || selectedRoute?.lane_name || "Waiting for task";
+  const recorder = state.cockpitMode === "recorder";
+  const evidenceRequested = recorder || state.packetMode === "record";
+
+  screen.dataset.cockpitMode = state.cockpitMode;
+  screen.dataset.evidence = evidenceRequested ? "requested" : "optional";
+  setText("#create-task-count", `${task.length}/600`);
+  setText("#create-route-title", selectedRoute?.lane_name || selectedLane);
+  setText("#create-route-fit", selectedRoute?.status || "Local advice");
+  setText(
+    "#create-route-body",
+    selectedRoute?.summary ||
+      (task
+        ? "Route advice is waiting for the next local refresh."
+        : "Write a task and Hamiltonian will refresh local route recommendations."),
+  );
+  setText("#create-evidence-title", evidenceRequested ? "Evidence attached on creation" : "Evidence optional");
+  setText(
+    "#create-evidence-body",
+    evidenceRequested
+      ? "AgentLedger is represented locally as a placeholder for this packet only."
+      : "AgentLedger stays out unless you attach evidence or use recorder mode.",
+  );
+  setText("#create-boundary-mode", recorder ? "Recorder packet" : "Normal orchestration");
+  setText(
+    "#create-boundary-body",
+    recorder
+      ? "Recorder mode captures maximum local evidence. Remote execution remains off."
+      : "Remote execution is off. Packet creation writes local state only.",
+  );
+}
+
+function compactText(value, maxLength = 120) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function isRecorderPacket(packet) {
+  if (!packet?.packet_id) return false;
+  const evidenceStatus = String(packet.evidence_status || "").toLowerCase();
+  return Boolean(
+    normalizeStage(packet.stage) === "record" ||
+      packet.mode === "recorder" ||
+      packet.attach_evidence ||
+      evidenceStatus.includes("represented") ||
+      evidenceStatus.includes("simulated"),
+  );
+}
+
+function recorderPacketForDisplay(data) {
+  const candidates = [state.selectedPacket, state.lastPacket, ...(data?.recent_packets || [])];
+  return candidates.find(isRecorderPacket) || null;
+}
+
+function syncRecorderTaskCount() {
+  const input = $("#recorder-task-input");
+  const count = $("#recorder-task-count");
+  if (count) count.textContent = `${input?.value.length || 0}/600`;
+}
+
+function recorderCaptureRows(packet, task) {
+  const hasTask = Boolean(task);
+  return [
+    {
+      label: "Inputs",
+      status: packet ? "recorded" : hasTask ? "ready" : "waiting",
+      detail: packet
+        ? "Task prompt and operator note were saved locally."
+        : hasTask
+          ? "Ready to write into a local recorder packet."
+          : "Write a recorder note before creating the packet.",
+    },
+    {
+      label: "Context",
+      status: packet ? "recorded" : "local",
+      detail: packet
+        ? "Packet context is available on this machine."
+        : "Context will stay inside the local packet store.",
+    },
+    {
+      label: "Tool calls",
+      status: packet ? "represented" : "waiting",
+      detail: packet
+        ? "Tool activity is represented as sanitized local packet evidence."
+        : "No tool activity is represented until the packet is recorded.",
+    },
+    {
+      label: "Evidence ledger",
+      status: packet?.attach_evidence ? "represented" : "off",
+      detail: packet?.attach_evidence
+        ? "AgentLedger is represented locally only for this packet."
+        : "No AgentLedger representation exists until evidence is selected.",
+    },
+  ];
+}
+
+function renderRecorderEvidenceList(packet, task) {
+  const list = $("#recorder-evidence-list");
+  if (!list) return;
+  clear(list);
+  recorderCaptureRows(packet, task).forEach((item) => {
+    const row = document.createElement("article");
+    row.className = `recorder-evidence-row recorder-evidence-${statusClass(item.status)}`;
+    const body = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = item.label;
+    const detail = document.createElement("p");
+    detail.textContent = item.detail;
+    body.append(label, detail);
+    row.append(body, pill(item.status));
+    list.appendChild(row);
+  });
+}
+
+function renderRecorderProofBundle(packet) {
+  const bundle = $("#recorder-proof-bundle");
+  if (!bundle) return;
+  clear(bundle);
+  if (!packet) {
+    const empty = document.createElement("div");
+    empty.className = "recorder-proof-empty";
+    const title = document.createElement("strong");
+    title.textContent = "No live bundle yet";
+    const body = document.createElement("p");
+    body.textContent = "Create a recorder packet to produce a local proof bundle placeholder.";
+    empty.append(title, body);
+    bundle.appendChild(empty);
+    return;
+  }
+
+  [
+    ["Packet ID", packet.packet_id],
+    ["Evidence", packet.attach_evidence ? "AgentLedger represented locally" : "Evidence not attached"],
+    ["Boundary", "Local-only. Remote execution off."],
+    ["Export", packet.export?.filename || "Not exported yet"],
+  ].forEach(([label, value]) => {
+    const row = document.createElement("div");
+    row.className = "recorder-proof-row";
+    const key = document.createElement("span");
+    key.textContent = label;
+    const val = document.createElement("strong");
+    val.textContent = value;
+    row.append(key, val);
+    bundle.appendChild(row);
+  });
+}
+
+function renderFlightRecorder(data) {
+  const screen = $("#recorder-panel");
+  if (!screen) return;
+  const packet = recorderPacketForDisplay(data);
+  const recorderInput = $("#recorder-task-input");
+  const taskInput = $("#task-input");
+
+  if (recorderInput && document.activeElement !== recorderInput && !recorderInput.value) {
+    const sourceTask = taskInput?.value.trim() || packet?.task || packet?.task_excerpt || "";
+    if (sourceTask) recorderInput.value = compactText(sourceTask, 600);
+  }
+
+  const task = recorderInput?.value.trim() || taskInput?.value.trim() || "";
+  const armed = state.cockpitMode === "recorder";
+  const captured = Boolean(packet?.packet_id);
+  const taskObjective = compactText(packet?.task || packet?.task_excerpt || task, 118);
+  const stageLabel = packet ? STAGE_LABELS[normalizeStage(packet.stage)]?.title || packet.stage || "Record" : "Record";
+
+  screen.dataset.recorderMode = armed ? "active" : "inactive";
+  screen.dataset.recorderPacket = captured ? "captured" : "empty";
+  screen.dataset.packetId = packet?.packet_id || "";
+  syncRecorderTaskCount();
+
+  setText("#recorder-screen-title", captured ? "Recorder packet captured" : "Maximum evidence capture");
+  setText("#recorder-status-badge", captured ? "Captured" : armed ? "Armed" : "Inactive");
+  setText(
+    "#recorder-status-title",
+    captured ? "Flight recorder packet is saved" : armed ? "Recorder mode armed" : "Recorder mode inactive",
+  );
+  setText(
+    "#recorder-status-body",
+    captured
+      ? "The packet contains local evidence placeholders only. Nothing has executed remotely."
+      : armed
+        ? "Create the packet when the mission needs a full local trace."
+        : "Switch to recorder mode when the packet needs a fuller local trace.",
+  );
+
+  const wave = $(".recorder-waveform");
+  if (wave) wave.classList.toggle("recorder-waveform-active", armed || captured);
+
+  const armButton = $("#recorder-arm-button");
+  if (armButton) armButton.textContent = armed ? "Recorder mode active" : "Switch to recorder mode";
+
+  setText("#recorder-packet-stage", captured ? stageLabel : armed ? "Ready" : "Waiting");
+  setText("#recorder-packet-title", captured ? homeTaskTitle(packet) : task ? "Ready to record" : "No recorder packet yet");
+  setText("#recorder-packet-stage-copy", stageLabel);
+  setText(
+    "#recorder-packet-objective",
+    taskObjective || "Create a local evidence packet when the work requires it.",
+  );
+  setText(
+    "#recorder-packet-evidence",
+    packet?.attach_evidence ? "AgentLedger represented locally only." : "Evidence attaches when recorder mode creates the packet.",
+  );
+  setText("#recorder-packet-updated", formatHomeTime(packet?.updated_at || packet?.created_at));
+  setText("#recorder-packet-code", captured ? homePacketCode(packet) : "M-FR");
+  setText("#recorder-evidence-stamp", packet?.attach_evidence ? "Evidence attached" : "Evidence matters");
+  setText("#recorder-packet-id", captured ? `Packet ID ${packet.packet_id}` : "Recorder packet not created");
+
+  const createButton = $("#recorder-create-button");
+  if (createButton) createButton.textContent = captured ? "Record another packet" : "Record flight packet";
+
+  const openButton = $("#recorder-open-packet-button");
+  if (openButton) {
+    openButton.disabled = !captured;
+    openButton.textContent = captured ? "Open recorder packet" : "Open recorder packet";
+  }
+
+  setText(
+    "#recorder-footer-note",
+    captured
+      ? `Saved locally as ${packet.packet_id}. Remote execution remains off.`
+      : "Recorder mode is slower and stores more local packet metadata.",
+  );
+
+  renderRecorderEvidenceList(packet, task);
+  renderRecorderProofBundle(packet);
+}
+
+function handoffPacketForDisplay(data) {
+  if (state.selectedPacket?.packet_id) return state.selectedPacket;
+  if (state.lastPacket?.packet_id) return state.lastPacket;
+  return (data?.recent_packets || [])[0] || null;
+}
+
+function handoffExportForPacket(packet) {
+  if (!packet?.packet_id) return null;
+  if (state.lastExport && state.selectedPacket?.packet_id === packet.packet_id) return state.lastExport;
+  if (packet.has_handoff_export || packet.handoff_export_filename) {
+    return {
+      filename: packet.handoff_export_filename || "handoff-export.md",
+      sanitized: true,
+    };
+  }
+  return packet.exports?.handoff_markdown || packet.export || null;
+}
+
+function handoffIsReady(packet) {
+  if (!packet?.packet_id) return false;
+  const handoff = packet.handoff || {};
+  return Boolean(handoff.ready || handoffExportForPacket(packet));
+}
+
+function handoffGateStatus(packet) {
+  const gateRun = packet?.gate_run || {};
+  if (Number(gateRun.blocked || 0) > 0) return "blocked";
+  if (Number(gateRun.completed || 0) > 0 && Number(gateRun.total || 0) > 0) {
+    return `${gateRun.completed}/${gateRun.total} checked`;
+  }
+  return gateRun.status || "waiting";
+}
+
+function handoffReadinessRows(packet) {
+  if (!packet) {
+    return [
+      { label: "Readiness gates", status: "waiting", detail: "Open or create a packet first." },
+      { label: "Execution boundary", status: "off", detail: "No local or remote execution is prepared." },
+      { label: "Handoff package", status: "not ready", detail: "A packet must reach handoff before export." },
+      { label: "Sanitized export", status: "waiting", detail: "No markdown export has been written." },
+    ];
+  }
+
+  const handoff = packet.handoff || {};
+  const executionBoundary = packet.execution_boundary || {};
+  const exportInfo = handoffExportForPacket(packet);
+  return [
+    {
+      label: "Readiness gates",
+      status: handoffGateStatus(packet),
+      detail: packet.gate_run?.next_action || "Local memory, intent, and cost checks are recorded in the packet.",
+    },
+    {
+      label: "Execution boundary",
+      status: executionBoundary.remote_execution ? "blocked" : executionBoundary.status || "manual only",
+      detail: executionBoundary.remote_execution
+        ? "External execution is blocked for this local prototype."
+        : "Remote execution is off; this is an operator approval boundary.",
+    },
+    {
+      label: "Handoff package",
+      status: handoff.ready ? "ready" : handoff.status || "not ready",
+      detail: handoff.summary || handoff.next_action || "Prepare handoff after the execution boundary.",
+    },
+    {
+      label: "Sanitized export",
+      status: exportInfo ? "complete" : handoff.ready ? "ready" : "waiting",
+      detail: exportInfo?.filename
+        ? `${exportInfo.filename} is written locally and sanitized.`
+        : handoff.ready
+          ? "Ready to write a sanitized local markdown handoff."
+          : "Export remains locked until the handoff package is ready.",
+    },
+  ];
+}
+
+function handoffSummaryRows(packet, exportInfo) {
+  if (!packet) {
+    return [
+      ["Evidence items", "Waiting", "Evidence is only represented after a packet exists."],
+      ["Sources", "Local packet store", "No source bundle has been selected."],
+      ["Packet size", "Pending", "Size appears after export."],
+      ["Integrity check", "Waiting", "Sanitization runs during local export."],
+    ];
+  }
+
+  const evidence = packet.attach_evidence
+    ? "AgentLedger represented locally"
+    : "Not attached";
+  const exportBytes = Number(exportInfo?.size_bytes || exportInfo?.bytes || 0);
+  const estimatedBytes = JSON.stringify({
+    packet_id: packet.packet_id,
+    task: packet.task || packet.task_excerpt || "",
+    gates: packet.gates || [],
+    handoff: packet.handoff || {},
+  }).length;
+  return [
+    [
+      "Evidence items",
+      evidence,
+      packet.attach_evidence
+        ? "The packet carries a local placeholder only."
+        : "AgentLedger is not represented for this packet.",
+    ],
+    [
+      "Sources",
+      `${(packet.gates || []).length || 0} gate records`,
+      "Summary is assembled from local packet state, gate records, route, and handoff metadata.",
+    ],
+    [
+      "Packet size",
+      formatPacketSize(exportBytes || estimatedBytes),
+      exportInfo ? "Export size is from the sanitized local file." : "Estimated from local packet data before export.",
+    ],
+    [
+      "Integrity check",
+      exportInfo?.sanitized ? "Passed" : handoffIsReady(packet) ? "Ready" : "Waiting",
+      exportInfo?.sanitized
+        ? "Private paths and sensitive-looking values are removed before handoff."
+        : "The sanitizer runs only when the operator exports.",
+    ],
+  ];
+}
+
+function formatPacketSize(bytes) {
+  if (!bytes || Number.isNaN(bytes)) return "Pending";
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+function renderHandoffReadinessList(packet) {
+  const list = $("#handoff-readiness-list");
+  if (!list) return;
+  clear(list);
+  handoffReadinessRows(packet).forEach((item) => {
+    const row = document.createElement("article");
+    row.className = `handoff-readiness-row gate-tone-${gateToneName(item.status)}`;
+    const body = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = item.label;
+    const detail = document.createElement("p");
+    detail.textContent = item.detail;
+    body.append(label, detail);
+    row.append(body, pill(item.status));
+    list.appendChild(row);
+  });
+}
+
+function renderHandoffSummary(packet, exportInfo) {
+  const summary = $("#handoff-export-summary");
+  if (!summary) return;
+  clear(summary);
+  handoffSummaryRows(packet, exportInfo).forEach(([label, value, detail]) => {
+    const row = document.createElement("article");
+    row.className = "handoff-summary-row";
+    const body = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = label;
+    const copy = document.createElement("p");
+    copy.textContent = detail;
+    body.append(title, copy);
+    const val = document.createElement("span");
+    val.textContent = value;
+    row.append(body, val);
+    summary.appendChild(row);
+  });
+}
+
+function handoffPrimaryState(packet) {
+  if (!packet?.packet_id) {
+    return {
+      label: "Create packet",
+      title: "Open or create a packet",
+      body: "Select an existing local packet or create a new one before export.",
+      disabled: false,
+      run: () => revealSection("cockpit"),
+    };
+  }
+
+  const exportInfo = handoffExportForPacket(packet);
+  if (exportInfo) {
+    return {
+      label: "Export again",
+      title: "Export complete",
+      body: `${exportInfo.filename || "handoff-export.md"} is available as a sanitized local file.`,
+      disabled: false,
+      run: exportHandoffPacket,
+    };
+  }
+  if (handoffIsReady(packet)) {
+    return {
+      label: "Export packet",
+      title: "Ready to export",
+      body: "Write the sanitized handoff markdown locally. No public link or remote runner is created.",
+      disabled: false,
+      run: exportHandoffPacket,
+    };
+  }
+
+  const selected = state.selectedPacket?.packet_id === packet.packet_id;
+  const canPrepare = selected && !packetActionLockReason(packet, "handoff");
+  if (canPrepare) {
+    return {
+      label: "Prepare handoff",
+      title: "Prepare handoff",
+      body: "Move this packet to the local operator-handoff state before export.",
+      disabled: false,
+      run: prepareHandoffPacket,
+    };
+  }
+  if (!selected) {
+    return {
+      label: "Open packet",
+      title: "Open packet first",
+      body: "Load the packet into Mission Control before preparing its handoff.",
+      disabled: false,
+      run: openHandoffPacket,
+    };
+  }
+  const reason = packetActionLockReason(packet, "handoff") || "Handoff is not available from this packet state.";
+  return {
+    label: "Blocked",
+    title: "Handoff blocked",
+    body: reason,
+    disabled: true,
+    run: null,
+  };
+}
+
+function renderHandoffExport(data) {
+  const screen = $("#handoff-panel");
+  if (!screen) return;
+  const packet = handoffPacketForDisplay(data);
+  const exportInfo = handoffExportForPacket(packet);
+  const ready = handoffIsReady(packet);
+  const primary = handoffPrimaryState(packet);
+  const stageLabel = packet ? STAGE_LABELS[normalizeStage(packet.stage)]?.title || packet.stage || "Packet" : "Waiting";
+
+  screen.dataset.handoffState = exportInfo ? "exported" : ready ? "ready" : packet ? "waiting" : "empty";
+  screen.dataset.packetId = packet?.packet_id || "";
+  setText("#handoff-screen-title", exportInfo ? "Export complete" : ready ? "Packet ready for handoff" : "Handoff ready / Export");
+  setText("#handoff-ready-badge", exportInfo ? "Exported" : ready ? "Ready" : packet ? "Waiting" : "Empty");
+  setText(
+    "#handoff-ready-title",
+    exportInfo ? "Sanitized handoff written" : ready ? "Packet ready for handoff" : packet ? "Handoff not ready yet" : "No packet selected",
+  );
+  setText(
+    "#handoff-ready-body",
+    exportInfo
+      ? `${exportInfo.filename || "handoff-export.md"} is stored with the local packet.`
+      : ready
+        ? "The packet can be exported as a sanitized local handoff. Remote execution remains off."
+        : packet
+          ? (packet.handoff?.next_action || "Prepare execution and handoff before exporting.")
+          : "Open a packet before exporting a sanitized local handoff.",
+  );
+
+  setText("#handoff-packet-stage", stageLabel);
+  setText("#handoff-packet-title", homeTaskTitle(packet));
+  setText("#handoff-packet-stage-copy", stageLabel);
+  setText("#handoff-packet-objective", compactText(packet?.task || packet?.task_excerpt || "Open or prepare a packet for operator review.", 118));
+  setText(
+    "#handoff-packet-evidence",
+    packet?.attach_evidence ? "AgentLedger represented locally only." : "AgentLedger not attached.",
+  );
+  setText("#handoff-packet-updated", formatHomeTime(packet?.updated_at || packet?.created_at));
+  setText("#handoff-packet-code", homePacketCode(packet));
+  setText("#handoff-evidence-stamp", packet?.attach_evidence ? "Evidence attached" : "Evidence optional");
+  setText("#handoff-packet-id", packet?.packet_id ? `Packet ID ${packet.packet_id}` : "Packet ID not selected");
+
+  setText("#handoff-next-title", primary.title);
+  setText("#handoff-next-body", primary.body);
+  const primaryButton = $("#handoff-primary-button");
+  if (primaryButton) {
+    primaryButton.textContent = primary.label;
+    primaryButton.disabled = primary.disabled;
+    primaryButton.onclick = primary.run;
+  }
+
+  const exportButton = $("#handoff-export-button");
+  if (exportButton) {
+    const canExport = Boolean(packet?.packet_id && ready);
+    exportButton.textContent = exportInfo ? "Export again" : canExport ? "Export packet" : primary.label === "Prepare handoff" ? "Prepare handoff" : "Export locked";
+    exportButton.disabled = !canExport && primary.label !== "Prepare handoff";
+    exportButton.onclick = primary.label === "Prepare handoff" ? prepareHandoffPacket : exportHandoffPacket;
+  }
+
+  const openButton = $("#handoff-open-packet-button");
+  if (openButton) {
+    openButton.disabled = !packet?.packet_id;
+    openButton.onclick = openHandoffPacket;
+  }
+
+  setText("#handoff-summary-state", exportInfo ? "Exported" : ready ? "Ready" : packet ? "Pending" : "Waiting");
+  setText("#handoff-evidence-state", packet?.attach_evidence ? "Represented" : "Optional");
+  setText(
+    "#handoff-evidence-body",
+    packet?.attach_evidence
+      ? "AgentLedger is represented as a local placeholder for this packet only. No recorder or remote agent has executed."
+      : "AgentLedger stays out unless evidence is selected. This export can remain evidence-light.",
+  );
+  setText(
+    "#handoff-footer-note",
+    exportInfo
+      ? `Exported locally as ${exportInfo.filename || "handoff-export.md"}.`
+      : packet
+        ? "Handoff exports are sanitized local files. Share links and vault sync are disabled."
+        : "Open a packet to prepare a local handoff export.",
+  );
+
+  renderHandoffReadinessList(packet);
+  renderHandoffSummary(packet, exportInfo);
+}
+
+function openHandoffPacket() {
+  const packet = handoffPacketForDisplay(state.data);
+  if (!packet?.packet_id) return;
+  loadPacketDetail(packet.packet_id).catch((error) => {
+    setText("#handoff-footer-note", error.message);
+  });
+}
+
+async function prepareHandoffPacket() {
+  const packet = handoffPacketForDisplay(state.data);
+  if (!packet?.packet_id) return;
+  if (state.selectedPacket?.packet_id !== packet.packet_id) {
+    state.selectedPacket = packet;
+    renderPacketDetail(packet);
+  }
+  setText("#handoff-footer-note", "Preparing local handoff package...");
+  await advanceSelectedPacket("handoff");
+  revealSection("handoff-panel");
+  renderHandoffExport(state.data);
+}
+
+async function exportHandoffPacket() {
+  const packet = handoffPacketForDisplay(state.data);
+  if (!packet?.packet_id) return;
+  if (state.selectedPacket?.packet_id !== packet.packet_id) {
+    state.selectedPacket = packet;
+    renderPacketDetail(packet);
+  }
+  if (!handoffIsReady(state.selectedPacket)) {
+    await prepareHandoffPacket();
+  }
+  setText("#handoff-footer-note", "Writing sanitized local handoff export...");
+  await exportSelectedPacket();
+  revealSection("handoff-panel");
+  renderHandoffExport(state.data);
+}
+
+function handoffBackTarget() {
+  return state.selectedPacket?.packet_id ? "packet-detail-panel" : "mission-home";
+}
+
+function initHandoffExportControls() {
+  const backButton = $("#handoff-back-packet");
+  if (backButton) {
+    backButton.addEventListener("click", () => revealSection(handoffBackTarget()));
+  }
+
+  const shareButton = $("#handoff-share-link-button");
+  if (shareButton) {
+    shareButton.title = "Public sharing is disabled in the local prototype.";
+  }
+  const vaultButton = $("#handoff-save-vault-button");
+  if (vaultButton) {
+    vaultButton.title = "Secure vault sync is represented only in this prototype.";
+  }
 }
 
 function applyCockpitMode() {
@@ -1820,7 +3912,7 @@ function applyCockpitMode() {
   if (recorderIntro) recorderIntro.hidden = !recorder;
 
   if (cockpitTitle) {
-    cockpitTitle.textContent = recorder ? "Flight recorder" : "Assign bounded work";
+    cockpitTitle.textContent = recorder ? "Flight recorder packet" : "Define the mission packet";
   }
 
   if (recorder) {
@@ -1831,6 +3923,9 @@ function applyCockpitMode() {
     }
     if (missionPanel) missionPanel.hidden = true;
   } else {
+    if (state.packetMode === "record" && !state.lastPacket?.attach_evidence) {
+      state.packetMode = "draft";
+    }
     if ($("#task-input")) {
       $("#task-input").placeholder = "Patch the repo, run the proof, and prepare a handoff.";
     }
@@ -1838,6 +3933,10 @@ function applyCockpitMode() {
   }
 
   renderPacket();
+  renderMissionHome(state.data);
+  renderCreatePacketScreen(state.data);
+  renderFlightRecorder(state.data);
+  renderHandoffExport(state.data);
 }
 
 function _queryRepoParams() {
@@ -1860,6 +3959,9 @@ function packetActionLockReason(packet, targetStage, plan = buildAdvancePlan(pac
     return "Choose or keep a lane before running gates.";
   }
   if (plan.blocked) return plan.blockedMessage || "Packet is blocked by gates.";
+  if (targetStage === "handoff" && ACTIVE_RUN_STATES.has(packet.runner_run?.status)) {
+    return "Wait for the local runner to finish or cancel it before handoff.";
+  }
   if (!canAdvanceTo(packet.stage, targetStage)) {
     return `${STAGE_LABELS[targetStage].title} is not ahead of the current packet stage.`;
   }
@@ -1899,10 +4001,37 @@ function packetCommandState(packet) {
   if (state.cockpitMode === "recorder") {
     return {
       title: "Recorder mode",
-      detail: "Create a new recorder packet from Task control.",
+      detail: "Create a new recorder packet from Flight Recorder.",
       label: "Recorder only",
       disabled: true,
       run: null,
+    };
+  }
+  const runnerPlan = packet.runner_plan || {};
+  const runnerRun = packet.runner_run || {};
+  const runnerActive = ACTIVE_RUN_STATES.has(runnerRun.status);
+  const runnerCanLaunch =
+    packet.stage === "execute" &&
+    packet.agent_id === "codex" &&
+    runnerPlan.launch_supported === true &&
+    Number(packet.gate_run?.blocked || 0) === 0 &&
+    Number(packet.gate_run?.warnings || 0) === 0;
+  if (runnerActive) {
+    return {
+      title: "Local run in progress",
+      detail: runnerRun.summary || "Codex is running inside the bounded workspace.",
+      label: "Run active",
+      disabled: true,
+      run: null,
+    };
+  }
+  if (runnerCanLaunch && runnerRun.status !== "succeeded") {
+    return {
+      title: runnerRun.status && runnerRun.status !== "not-started" ? "Retry bounded run" : "Launch bounded run",
+      detail: "Start Codex locally with workspace-write, a timeout, and remote command execution off.",
+      label: runnerRun.status && runnerRun.status !== "not-started" ? "Retry local run" : "Launch local run",
+      disabled: false,
+      run: () => launchSelectedRunner().catch((error) => setText("#runner-control-summary", error.message)),
     };
   }
   const current = mapStage(packet);
@@ -1980,6 +4109,215 @@ function updatePacketAdvanceButtons(packet) {
   }
 }
 
+function runnerRunState(packet) {
+  return packet?.runner_run || {
+    status: "not-started",
+    local_execution: false,
+    remote_execution: false,
+    events: [],
+    last_message: "",
+    summary: "No local runner has started for this packet.",
+  };
+}
+
+function runnerLaunchReason(packet) {
+  if (!packet?.packet_id) return "Select a packet first.";
+  if (packet.stage !== "execute") return "Prepare this packet to execute stage first.";
+  if (packet.agent_id !== "codex") return "Only the Codex lane has a live local adapter.";
+  if (Number(packet.gate_run?.blocked || 0) > 0) return "Blocked gates prevent launch.";
+  if (Number(packet.gate_run?.warnings || 0) > 0) return "Clear gate warnings before launch.";
+  if (!packet.runner_plan?.launch_supported) {
+    return packet.runner_plan?.adapter_detail || "The local Codex CLI adapter is unavailable.";
+  }
+  if (ACTIVE_RUN_STATES.has(packet.runner_run?.status)) return "A local run is already active.";
+  return "";
+}
+
+function setRunnerBadge(status) {
+  const badge = $("#runner-status-badge");
+  if (!badge) return;
+  const text = String(status || "not-started");
+  const tone = statusTone(text);
+  badge.className = `pill ${tone.className}`;
+  badge.textContent = text.replaceAll("-", " ");
+  badge.title = tone.meaning;
+}
+
+function renderRunnerEvents(run) {
+  const list = $("#runner-event-list");
+  if (!list) return;
+  clear(list);
+  const events = Array.isArray(run?.events) ? run.events.slice(-12) : [];
+  if (!events.length) {
+    const row = document.createElement("div");
+    row.className = "runner-event-row";
+    const status = document.createElement("strong");
+    status.textContent = run?.status || "waiting";
+    const summary = document.createElement("span");
+    summary.textContent = run?.status === "not-started" ? "No runner events yet." : run?.summary || "Waiting for local status.";
+    row.append(status, summary);
+    list.appendChild(row);
+    return;
+  }
+  events.forEach((event) => {
+    const row = document.createElement("div");
+    row.className = "runner-event-row";
+    const status = document.createElement("strong");
+    status.textContent = event.status || event.type || "event";
+    const summary = document.createElement("span");
+    summary.textContent = event.summary || event.type || "Local runner event";
+    row.append(status, summary);
+    list.appendChild(row);
+  });
+}
+
+function renderRunnerControl(packet) {
+  const control = $("#packet-runner-control");
+  if (!control) return;
+  const plan = packet?.runner_plan || {};
+  const run = runnerRunState(packet);
+  const status = run.status || "not-started";
+  const active = ACTIVE_RUN_STATES.has(status);
+  const launchReason = runnerLaunchReason(packet);
+  const launchButton = $("#runner-launch-button");
+  const cancelButton = $("#runner-cancel-button");
+  const timeoutInput = $("#runner-timeout-input");
+  const finalMessage = $("#runner-final-message");
+
+  control.dataset.runState = status;
+  control.dataset.packetId = packet?.packet_id || "";
+  setRunnerBadge(status);
+  setText(
+    "#runner-control-title",
+    active ? "Codex run active" : status === "succeeded" ? "Codex run complete" : plan.launch_supported ? "Codex adapter ready" : "Codex adapter waiting",
+  );
+  setText(
+    "#runner-adapter-state",
+    plan.adapter_available ? `${plan.adapter_id || "codex-local"} ready` : plan.adapter_detail || "Unavailable",
+  );
+  setText("#runner-sandbox-state", plan.sandbox_policy || "workspace-write");
+  setText("#runner-boundary-state", run.remote_execution ? "External execution detected" : "Local process only");
+  setText("#runner-control-summary", run.status !== "not-started" ? run.summary : plan.summary || run.summary);
+  setText(
+    "#runner-control-note",
+    run.run_id
+      ? `Run ${run.run_id}. ${Number(run.duration_seconds || 0).toFixed(1)}s. Remote command execution remains off.`
+      : "Local workspace process. Codex model access uses the existing CLI session; remote command execution remains off.",
+  );
+
+  if (launchButton) {
+    launchButton.disabled = Boolean(launchReason);
+    launchButton.title = launchReason;
+    launchButton.textContent = ["failed", "timed-out", "cancelled", "interrupted"].includes(status)
+      ? "Retry local run"
+      : "Launch local run";
+  }
+  if (cancelButton) {
+    cancelButton.disabled = !active;
+    cancelButton.title = active ? "Stop the bounded local process tree" : "No local run is active";
+  }
+  if (timeoutInput) {
+    timeoutInput.disabled = active;
+    if (run.timeout_seconds && document.activeElement !== timeoutInput) timeoutInput.value = String(run.timeout_seconds);
+  }
+  renderRunnerEvents(run);
+  if (finalMessage) {
+    finalMessage.textContent = run.last_message || "";
+    finalMessage.hidden = !run.last_message;
+  }
+}
+
+function clearRunnerPoll() {
+  window.clearTimeout(state.runnerPollTimer);
+  state.runnerPollTimer = null;
+}
+
+async function refreshSelectedRunnerRun(scheduleNext = true) {
+  const packet = state.selectedPacket;
+  if (!packet?.packet_id) return;
+  const seq = state.runnerPollSeq + 1;
+  state.runnerPollSeq = seq;
+  const params = _queryRepoParams();
+  const response = await fetch(`/api/packets/${encodeURIComponent(packet.packet_id)}/run?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Runner status request failed");
+  if (seq !== state.runnerPollSeq || state.selectedPacket?.packet_id !== packet.packet_id) return;
+  state.selectedPacket.runner_run = data.run;
+  renderRunnerControl(state.selectedPacket);
+  renderPacketMissionControl(state.selectedPacket);
+  updatePacketCommand(state.selectedPacket);
+  updatePacketAdvanceButtons(state.selectedPacket);
+  clearRunnerPoll();
+  if (scheduleNext && ACTIVE_RUN_STATES.has(data.run?.status)) {
+    state.runnerPollTimer = window.setTimeout(() => {
+      refreshSelectedRunnerRun(true).catch((error) => {
+        setText("#runner-control-summary", error.message);
+      });
+    }, 700);
+  }
+}
+
+async function launchSelectedRunner() {
+  const packet = state.selectedPacket;
+  const reason = runnerLaunchReason(packet);
+  if (reason) {
+    setText("#runner-control-summary", reason);
+    return;
+  }
+  const timeoutInput = $("#runner-timeout-input");
+  const timeoutSeconds = Number(timeoutInput?.value || 900);
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 5 || timeoutSeconds > 3600) {
+    setText("#runner-control-summary", "Timeout must be a whole number from 5 to 3600 seconds.");
+    timeoutInput?.focus();
+    return;
+  }
+  clearRunnerPoll();
+  setText("#runner-control-summary", "Starting the bounded local Codex process...");
+  const params = _queryRepoParams();
+  const response = await fetch(`/api/packets/${encodeURIComponent(packet.packet_id)}/run?${params.toString()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timeout_seconds: timeoutSeconds }),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Runner launch failed");
+  state.selectedPacket.runner_run = data.run;
+  renderRunnerControl(state.selectedPacket);
+  updatePacketAdvanceButtons(state.selectedPacket);
+  await refreshSelectedRunnerRun(true);
+}
+
+async function cancelSelectedRunner() {
+  const packet = state.selectedPacket;
+  if (!packet?.packet_id || !ACTIVE_RUN_STATES.has(packet.runner_run?.status)) return;
+  setText("#runner-control-summary", "Cancelling the local process tree...");
+  const params = _queryRepoParams();
+  const response = await fetch(
+    `/api/packets/${encodeURIComponent(packet.packet_id)}/run/cancel?${params.toString()}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Runner cancellation failed");
+  state.selectedPacket.runner_run = data.run;
+  renderRunnerControl(state.selectedPacket);
+  await refreshSelectedRunnerRun(true);
+}
+
+function initRunnerControls() {
+  const launchButton = $("#runner-launch-button");
+  const cancelButton = $("#runner-cancel-button");
+  if (launchButton) {
+    launchButton.addEventListener("click", () => {
+      launchSelectedRunner().catch((error) => setText("#runner-control-summary", error.message));
+    });
+  }
+  if (cancelButton) {
+    cancelButton.addEventListener("click", () => {
+      cancelSelectedRunner().catch((error) => setText("#runner-control-summary", error.message));
+    });
+  }
+}
+
 async function advanceSelectedPacket(targetStage) {
   const packet = state.selectedPacket;
   if (!packet || !packet.packet_id) {
@@ -2030,6 +4368,235 @@ async function selectPacketLane(agentId) {
   return data.packet;
 }
 
+function setHomeCockpitMode(mode) {
+  const target = mode === "recorder" ? $("#mode-recorder") : $("#mode-orchestrate");
+  if (!target) return;
+  target.checked = true;
+  applyCockpitMode();
+  scheduleLiveRouteUpdate(0);
+}
+
+function initMissionHomeControls() {
+  const form = $("#simple-run-form");
+  if (form) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      runSimpleMission().catch((error) => {
+        setSimpleRunState("error", "The job could not start", error.message, {
+          packetId: state.simpleRun.packetId,
+        });
+      });
+    });
+  }
+
+  const taskInput = $("#simple-task-input");
+  if (taskInput) {
+    taskInput.addEventListener("input", () => {
+      setText("#simple-task-count", `${taskInput.value.length}/600`);
+      if (state.simpleRun.status === "error" && !state.simpleRun.packetId) {
+        state.simpleRun = { status: "idle", title: "Ready", body: "", packetId: null, result: "" };
+        renderSimpleRunExperience();
+      }
+    });
+  }
+
+  const openPacket = $("#simple-open-packet");
+  if (openPacket) {
+    openPacket.addEventListener("click", () => {
+      if (!state.simpleRun.packetId) return;
+      loadPacketDetail(state.simpleRun.packetId).catch((error) => {
+        setSimpleRunState("error", "Could not open job details", error.message, {
+          packetId: state.simpleRun.packetId,
+        });
+      });
+    });
+  }
+
+  const manualButton = $("#simple-open-manual");
+  if (manualButton) {
+    manualButton.addEventListener("click", () => {
+      const manualInput = $("#task-input");
+      if (manualInput && taskInput?.value.trim()) {
+        manualInput.value = taskInput.value;
+        manualInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      revealSection("cockpit");
+      manualInput?.focus();
+    });
+  }
+
+  const viewAll = $("#home-view-all-packets");
+  if (viewAll) viewAll.addEventListener("click", () => revealSection("runs"));
+}
+
+function initGoalControls() {
+  const goalButton = $("#simple-goal-button");
+  if (goalButton) goalButton.addEventListener("click", openGoalBuilder);
+
+  const closeButton = $("#goal-dialog-close");
+  if (closeButton) closeButton.addEventListener("click", () => $("#goal-dialog")?.close());
+
+  const maintenanceButton = $("#goal-type-maintenance");
+  if (maintenanceButton) maintenanceButton.addEventListener("click", () => selectGoalType("maintenance"));
+
+  const expansionButton = $("#goal-type-expansion");
+  if (expansionButton) expansionButton.addEventListener("click", () => selectGoalType("expansion"));
+
+  const expansionInput = $("#goal-expansion-input");
+  if (expansionInput) {
+    expansionInput.addEventListener("input", () => {
+      if (state.goalDraft) {
+        state.goalDraft.preview = null;
+        state.goalDraft.saved = null;
+      }
+      renderGoalBuilder();
+      scheduleGoalPreview();
+    });
+  }
+
+  const saveButton = $("#goal-save-button");
+  if (saveButton) {
+    saveButton.addEventListener("click", () => {
+      ensureGoalSaved().catch((error) => setText("#goal-dialog-status", error.message));
+    });
+  }
+
+  const copyButton = $("#goal-copy-button");
+  if (copyButton) {
+    copyButton.addEventListener("click", () => {
+      copyCodexGoal().catch((error) => setText("#goal-dialog-status", error.message));
+    });
+  }
+
+  const openButton = $("#goal-open-codex-button");
+  if (openButton) {
+    openButton.addEventListener("click", () => {
+      openGoalInCodex().catch((error) => setText("#goal-dialog-status", error.message));
+    });
+  }
+
+  const reviewButton = $("#goal-review-button");
+  if (reviewButton) {
+    reviewButton.addEventListener("click", () => {
+      reviewCompletedGoal().catch((error) => setText("#goal-dialog-status", error.message));
+    });
+  }
+}
+
+function initCreatePacketControls() {
+  const backHome = $("#create-back-home");
+  if (backHome) {
+    backHome.addEventListener("click", () => {
+      revealSection("mission-home");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  const reviewRoutes = $("#create-review-routes");
+  if (reviewRoutes) {
+    reviewRoutes.addEventListener("click", () => {
+      refreshLiveRoutes().catch((error) => console.warn(error));
+      revealSection("routes");
+    });
+  }
+
+  const useRecorder = $("#create-use-recorder");
+  if (useRecorder) {
+    useRecorder.addEventListener("click", () => {
+      setHomeCockpitMode("recorder");
+      const taskInput = $("#task-input");
+      if (taskInput) taskInput.focus();
+    });
+  }
+}
+
+function recorderBackTarget() {
+  return state.selectedPacket?.packet_id ? "packet-detail-panel" : "mission-home";
+}
+
+async function createRecorderPacketFromScreen() {
+  const recorderInput = $("#recorder-task-input");
+  const taskInput = $("#task-input");
+  const task = recorderInput?.value.trim() || taskInput?.value.trim();
+  if (!task) {
+    setText("#recorder-status-badge", "Waiting");
+    setText("#recorder-status-title", "Write the recorder note first");
+    setText("#recorder-status-body", "Recorder packets need a bounded note before Hamiltonian can save them locally.");
+    setText("#recorder-footer-note", "Add the mission note, then record the packet.");
+    recorderInput?.focus();
+    return;
+  }
+
+  if (recorderInput && !recorderInput.value.trim()) recorderInput.value = task;
+  if (taskInput) taskInput.value = task;
+  setHomeCockpitMode("recorder");
+  renderFlightRecorder(state.data);
+  setText("#recorder-status-badge", "Saving");
+  setText("#recorder-status-title", "Saving local recorder packet");
+  setText("#recorder-status-body", "Hamiltonian is writing the packet locally with evidence placeholders.");
+  await submitPacket("record", { task });
+  renderFlightRecorder(state.data);
+}
+
+function openRecorderPacket() {
+  const packet = recorderPacketForDisplay(state.data);
+  if (!packet?.packet_id) return;
+  loadPacketDetail(packet.packet_id).catch((error) => {
+    setText("#recorder-footer-note", error.message);
+  });
+}
+
+function initFlightRecorderControls() {
+  const backButton = $("#recorder-back-packet");
+  if (backButton) {
+    backButton.addEventListener("click", () => revealSection(recorderBackTarget()));
+  }
+
+  const armButton = $("#recorder-arm-button");
+  if (armButton) {
+    armButton.addEventListener("click", () => {
+      setHomeCockpitMode("recorder");
+      revealSection("recorder-panel");
+      renderFlightRecorder(state.data);
+    });
+  }
+
+  const createButton = $("#recorder-create-button");
+  if (createButton) {
+    createButton.addEventListener("click", () => {
+      createRecorderPacketFromScreen().catch((error) => {
+        setText("#recorder-status-badge", "Error");
+        setText("#recorder-status-title", "Recorder packet failed");
+        setText("#recorder-status-body", error.message);
+        setText("#recorder-footer-note", error.message);
+      });
+    });
+  }
+
+  const openButton = $("#recorder-open-packet-button");
+  if (openButton) openButton.addEventListener("click", openRecorderPacket);
+
+  const recorderInput = $("#recorder-task-input");
+  if (recorderInput) {
+    recorderInput.addEventListener("input", () => {
+      syncRecorderTaskCount();
+      renderFlightRecorder(state.data);
+    });
+  }
+}
+
+function initRouteSelectionControls() {
+  const backButton = $("#route-back-packet");
+  if (backButton) {
+    backButton.addEventListener("click", () => revealSection(routeBackTarget()));
+  }
+
+  const cancelButton = $("#route-cancel-button");
+  if (cancelButton) {
+    cancelButton.addEventListener("click", () => revealSection(routeBackTarget()));
+  }
+}
+
 function render(data) {
   state.data = data;
   renderHeader(data);
@@ -2037,6 +4604,7 @@ function render(data) {
   renderLifecycle(data);
   renderGates(data);
   renderIntegrations(data);
+  renderAdvancedSettings(data);
   renderRoutes(data);
   renderRecentPackets(data);
   renderPacketDetail(state.selectedPacket);
@@ -2045,14 +4613,22 @@ function render(data) {
   renderTutorial(state.selectedPacket);
   renderNextActions(data);
   applyCockpitMode();
+  renderMissionHome(data);
+  renderCreatePacketScreen(data);
+  renderFlightRecorder(data);
+  renderHandoffExport(data);
 }
 
 async function load(repo) {
   const params = new URLSearchParams();
   if (repo) params.set("repo", repo);
-  const response = await fetch(`/api/state?${params.toString()}`);
-  const data = await response.json();
+  const [response, healthResponse] = await Promise.all([
+    fetch(`/api/state?${params.toString()}`),
+    fetch("/api/health"),
+  ]);
+  const [data, health] = await Promise.all([response.json(), healthResponse.json()]);
   if (!response.ok || data.error) throw new Error(data.error || "State request failed");
+  if (healthResponse.ok && !health.error) state.appInfo = health;
   state.repo = data.repo;
   render(data);
 }
@@ -2067,8 +4643,13 @@ async function loadPacketDetail(packetId) {
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || "Packet detail request failed");
   state.selectedPacket = data.packet;
+  if (state.lastExport && state.lastExport.packet_id && state.lastExport.packet_id !== data.packet.packet_id) {
+    state.lastExport = null;
+  }
   renderPacketDetail(data.packet);
   revealSection("packet-detail-panel");
+  clearRunnerPoll();
+  refreshSelectedRunnerRun(true).catch((error) => setText("#runner-control-summary", error.message));
 }
 
 async function exportSelectedPacket() {
@@ -2087,12 +4668,15 @@ async function exportSelectedPacket() {
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || "Packet export failed");
   state.selectedPacket = data.packet;
+  state.lastPacket = data.packet;
+  state.lastExport = data.export;
   renderPacketDetail(data.packet);
+  renderHandoffExport(state.data);
   $("#packet-detail-status").textContent = `Exported ${data.export.filename}`;
 }
 
-async function submitPacket(stageName) {
-  const task = $("#task-input").value.trim();
+async function submitPacket(stageName, options = {}) {
+  const task = String(options.task || $("#task-input").value || "").trim();
   if (!task) {
     $("#packet-preview").textContent = "Write a task before creating a packet.";
     return;
@@ -2100,6 +4684,7 @@ async function submitPacket(stageName) {
   const recorderMode = state.cockpitMode === "recorder";
   state.packetMode = recorderMode ? "record" : stageName;
   state.lastPacket = null;
+  state.lastExport = null;
   $("#packet-preview").textContent = "Saving packet...";
   const repo = $("#repo-input").value || state.repo;
   const modeStage = recorderMode ? "record" : stageName;
@@ -2121,6 +4706,7 @@ async function submitPacket(stageName) {
   state.selectedPacket = data.packet;
   await load(repo);
   await refreshLiveRoutes().catch((error) => console.warn(error));
+  renderFlightRecorder(state.data);
 }
 
 $("#repo-form").addEventListener("submit", (event) => {
@@ -2224,7 +4810,12 @@ $("#packet-export-button").addEventListener("click", () => {
 
 $("#task-input").addEventListener("input", () => {
   state.lastPacket = null;
+  state.lastExport = null;
+  if (state.cockpitMode !== "recorder" && state.packetMode === "record") {
+    state.packetMode = "draft";
+  }
   renderPacket();
+  renderFlightRecorder(state.data);
   scheduleLiveRouteUpdate();
 });
 $("#agent-select").addEventListener("change", () => {
@@ -2232,7 +4823,19 @@ $("#agent-select").addEventListener("change", () => {
   scheduleLiveRouteUpdate(0);
 });
 
+initMissionHomeControls();
+initGoalControls();
+initCreatePacketControls();
+initFlightRecorderControls();
+initHandoffExportControls();
+initAdvancedSettingsControls();
+initRouteSelectionControls();
+initPacketDetailControls();
+initGateViewControls();
+initRunnerControls();
 initPageNavigation();
+updateLocalTime();
+window.setInterval(updateLocalTime, 1000);
 
 load(state.repo).catch((error) => {
   $("#packet-preview").textContent = error.message;
