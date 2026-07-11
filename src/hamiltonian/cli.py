@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from .core import control_run, doctor
+from .desktop import run_desktop
 from .packets import (
     ADVANCE_STAGES,
     AGENTS,
@@ -53,6 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
     cockpit_p.add_argument("--repo", default=".", help="repository/workspace path")
     cockpit_p.add_argument("--host", default="127.0.0.1", help="host to bind")
     cockpit_p.add_argument("--port", type=int, default=8765, help="port to bind")
+
+    desktop_p = sub.add_parser("desktop", help="open Hamiltonian as a native desktop app")
+    desktop_p.add_argument(
+        "--repo",
+        default=None,
+        help="repository/workspace path; omit to use the native folder picker",
+    )
+    desktop_p.add_argument("--data-dir", default=None, help="desktop state directory")
+    desktop_p.add_argument("--debug", action="store_true", help="enable WebView developer tools")
 
     packets_p = sub.add_parser("packets", help="inspect local task packets")
     packets_p.add_argument("--repo", default=".", help="repository/workspace path")
@@ -135,6 +145,8 @@ def print_packet_detail(packet: dict[str, object]) -> None:
     lane = packet.get("lane") if isinstance(packet.get("lane"), dict) else {}
     gate_run = packet.get("gate_run") if isinstance(packet.get("gate_run"), dict) else {}
     execution = packet.get("execution_boundary") if isinstance(packet.get("execution_boundary"), dict) else {}
+    runner_plan = packet.get("runner_plan") if isinstance(packet.get("runner_plan"), dict) else {}
+    runner_run = packet.get("runner_run") if isinstance(packet.get("runner_run"), dict) else {}
     handoff = packet.get("handoff") if isinstance(packet.get("handoff"), dict) else {}
     gates = packet.get("gates") if isinstance(packet.get("gates"), list) else []
 
@@ -145,6 +157,8 @@ def print_packet_detail(packet: dict[str, object]) -> None:
     print(f"Lane: {lane.get('status', 'unknown')} / {lane.get('execution', 'unknown')}")
     print(f"Gate run: {gate_run.get('status', 'unknown')} ({gate_run.get('completed', 0)}/{gate_run.get('total', 0)})")
     print(f"Execution: {execution.get('status', 'unknown')} / {execution.get('mode', 'unknown')}")
+    print(f"Runner plan: {runner_plan.get('status', 'unknown')} / {runner_plan.get('mode', 'unknown')}")
+    print(f"Runner run: {runner_run.get('status', 'not-started')} / {runner_run.get('summary', 'No bounded local run recorded.')}")
     print(f"Handoff: {handoff.get('status', 'unknown')} / {'ready' if handoff.get('ready') else 'not ready'}")
     print(f"Task: {packet.get('task')}")
     print("Gates:")
@@ -184,6 +198,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command_name == "cockpit":
         run_cockpit(Path(args.repo), host=args.host, port=args.port)
         return 0
+
+    if args.command_name == "desktop":
+        try:
+            result = run_desktop(
+                Path(args.repo) if args.repo else None,
+                data_dir=Path(args.data_dir) if args.data_dir else None,
+                debug=args.debug,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"hamiltonian desktop: {exc}", file=sys.stderr)
+            return 2
+        return 0 if result.closed_cleanly else 2
 
     if args.command_name == "packets":
         try:

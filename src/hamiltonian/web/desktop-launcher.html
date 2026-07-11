@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hamiltonian</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --background: #080a0d;
+        --surface: #0e1318;
+        --surface-raised: #121921;
+        --border: #29333d;
+        --text: #f2f4f7;
+        --muted: #8793a0;
+        --accent: #ff6400;
+        --success: #39a56a;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        background: var(--background);
+        color: var(--text);
+        font-family: Inter, "Segoe UI", sans-serif;
+        margin: 0;
+        min-height: 100vh;
+      }
+
+      button { font: inherit; }
+
+      .launcher {
+        display: grid;
+        grid-template-columns: 250px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .launcher-rail {
+        background: #090d11;
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 28px 24px;
+      }
+
+      .brand {
+        align-items: center;
+        display: flex;
+        gap: 13px;
+      }
+
+      .brand-mark {
+        align-items: center;
+        border: 1px solid #4a2a19;
+        color: var(--accent);
+        display: flex;
+        font-family: Consolas, monospace;
+        font-size: 22px;
+        font-weight: 900;
+        height: 44px;
+        justify-content: center;
+        position: relative;
+        width: 44px;
+      }
+
+      .brand-mark::before,
+      .brand-mark::after {
+        background: var(--accent);
+        content: "";
+        height: 2px;
+        position: absolute;
+        width: 7px;
+      }
+
+      .brand-mark::before { left: -4px; }
+      .brand-mark::after { right: -4px; }
+
+      .brand strong {
+        display: block;
+        font-size: 15px;
+        text-transform: uppercase;
+      }
+
+      .brand span {
+        color: var(--muted);
+        display: block;
+        font-size: 11px;
+        margin-top: 3px;
+      }
+
+      .boundary {
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        display: grid;
+        font-size: 11px;
+        gap: 7px;
+        padding-top: 18px;
+        text-transform: uppercase;
+      }
+
+      .boundary strong {
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .boundary i {
+        background: var(--success);
+        border-radius: 50%;
+        display: inline-block;
+        height: 7px;
+        margin-right: 7px;
+        width: 7px;
+      }
+
+      .launcher-main {
+        align-content: center;
+        display: grid;
+        min-width: 0;
+        padding: 48px clamp(40px, 7vw, 110px);
+      }
+
+      .workspace-picker {
+        margin: 0 auto;
+        max-width: 850px;
+        width: 100%;
+      }
+
+      .eyebrow {
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 800;
+        margin: 0 0 10px;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        font-size: 34px;
+        line-height: 1.15;
+        margin: 0;
+      }
+
+      .picker-head {
+        align-items: end;
+        display: flex;
+        gap: 24px;
+        justify-content: space-between;
+        margin-bottom: 34px;
+      }
+
+      .open-folder {
+        background: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        color: #090a0c;
+        cursor: pointer;
+        font-weight: 850;
+        min-height: 46px;
+        padding: 0 21px;
+      }
+
+      .open-folder:hover { background: #ff7b2b; }
+      .open-folder:disabled { cursor: wait; opacity: 0.6; }
+
+      .recent-label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        margin: 0 0 10px;
+        text-transform: uppercase;
+      }
+
+      .recent-list {
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        overflow: hidden;
+      }
+
+      .recent-workspace {
+        align-items: center;
+        background: var(--surface);
+        border: 0;
+        border-bottom: 1px solid var(--border);
+        color: var(--text);
+        cursor: pointer;
+        display: grid;
+        gap: 3px 18px;
+        grid-template-columns: 1fr auto;
+        min-height: 68px;
+        padding: 13px 17px;
+        text-align: left;
+        width: 100%;
+      }
+
+      .recent-workspace:last-child { border-bottom: 0; }
+      .recent-workspace:hover { background: var(--surface-raised); }
+      .recent-workspace:disabled { cursor: wait; opacity: 0.6; }
+
+      .recent-workspace strong { font-size: 14px; }
+      .recent-workspace span {
+        color: var(--muted);
+        font-family: Consolas, monospace;
+        font-size: 11px;
+        grid-column: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .recent-workspace b {
+        color: var(--accent);
+        font-size: 18px;
+        font-weight: 500;
+        grid-column: 2;
+        grid-row: 1 / span 2;
+      }
+
+      .empty {
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 13px;
+        padding: 24px 17px;
+      }
+
+      .launcher-status {
+        color: var(--muted);
+        font-size: 12px;
+        margin: 15px 0 0;
+        min-height: 18px;
+      }
+
+      .launcher-status[data-state="error"] { color: #ff6b6b; }
+
+      @media (max-width: 760px) {
+        .launcher { grid-template-columns: 1fr; }
+        .launcher-rail {
+          border-bottom: 1px solid var(--border);
+          border-right: 0;
+          flex-direction: row;
+          padding: 17px 20px;
+        }
+        .boundary { border: 0; padding: 0; text-align: right; }
+        .launcher-main { align-content: start; padding: 36px 20px; }
+        .picker-head { align-items: stretch; display: grid; }
+        .open-folder { width: 100%; }
+        h1 { font-size: 28px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="launcher">
+      <aside class="launcher-rail">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">H</div>
+          <div><strong>Hamiltonian</strong><span>Agent operations</span></div>
+        </div>
+        <div class="boundary">
+          <span><i></i>Local-first</span>
+          <strong>Remote execution off</strong>
+          <span>Version __HAMILTONIAN_VERSION__</span>
+        </div>
+      </aside>
+      <main class="launcher-main">
+        <section class="workspace-picker" aria-labelledby="launcher-title">
+          <header class="picker-head">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h1 id="launcher-title">Choose a workspace</h1>
+            </div>
+            <button id="open-folder" class="open-folder" type="button" disabled>Open folder</button>
+          </header>
+          <p class="recent-label">Recent</p>
+          <div id="recent-list" class="recent-list"></div>
+          <p id="launcher-status" class="launcher-status" aria-live="polite">Starting local desktop controls...</p>
+        </section>
+      </main>
+    </div>
+    <script id="recent-data" type="application/json">__HAMILTONIAN_RECENTS__</script>
+    <script>
+      const recents = JSON.parse(document.querySelector('#recent-data').textContent || '[]');
+      const list = document.querySelector('#recent-list');
+      const status = document.querySelector('#launcher-status');
+      const openFolder = document.querySelector('#open-folder');
+
+      function setBusy(busy) {
+        openFolder.disabled = busy;
+        document.querySelectorAll('.recent-workspace').forEach((button) => { button.disabled = busy; });
+      }
+
+      function setStatus(message, state = 'normal') {
+        status.textContent = message;
+        status.dataset.state = state;
+      }
+
+      async function finishOpen(result) {
+        if (result?.ok && result.url) {
+          setStatus(`Opening ${result.repo_name}...`);
+          window.location.replace(result.url);
+          return;
+        }
+        if (!result?.cancelled) setStatus(result?.error || 'Could not open that workspace.', 'error');
+        setBusy(false);
+      }
+
+      recents.forEach((workspace) => {
+        const button = document.createElement('button');
+        button.className = 'recent-workspace';
+        button.type = 'button';
+        const name = document.createElement('strong');
+        name.textContent = workspace.name;
+        const path = document.createElement('span');
+        path.textContent = workspace.path;
+        const arrow = document.createElement('b');
+        arrow.textContent = '>';
+        button.append(name, path, arrow);
+        button.addEventListener('click', async () => {
+          setBusy(true);
+          setStatus(`Opening ${workspace.name}...`);
+          await finishOpen(await window.pywebview.api.open_workspace(workspace.path));
+        });
+        list.append(button);
+      });
+
+      if (!recents.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No recent workspaces.';
+        list.append(empty);
+      }
+
+      window.addEventListener('pywebviewready', () => {
+        setBusy(false);
+        setStatus('Ready.');
+      });
+
+      openFolder.addEventListener('click', async () => {
+        setBusy(true);
+        setStatus('Choose a folder...');
+        await finishOpen(await window.pywebview.api.choose_workspace());
+      });
+    </script>
+  </body>
+</html>

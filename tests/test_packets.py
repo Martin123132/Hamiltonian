@@ -21,6 +21,7 @@ from hamiltonian.packets import (
 )
 from hamiltonian.integrations import IntegrationStatus
 from hamiltonian.runtime import runtime_state_dict
+from hamiltonian.runners import RUNNER_RUN_SCHEMA
 from hamiltonian.server import CockpitHandler
 
 
@@ -62,6 +63,9 @@ def test_draft_packet_persists_pending_gates(tmp_path: Path) -> None:
     assert data["gate_run"]["status"] == "pending"
     assert data["gate_run"]["completed"] == 0
     assert data["gate_run"]["pending"] == 3
+    assert data["runner_plan"]["status"] == "not-prepared"
+    assert data["runner_plan"]["launch_supported"] is False
+    assert data["runner_plan"]["remote_execution"] is False
     assert gate(packet, "intent").status == "pending"
     assert gate(packet, "evidence").status == "skipped"
     assert list_task_packets(tmp_path)[0]["packet_id"] == packet.packet_id
@@ -259,6 +263,14 @@ def test_execute_packet_prepares_manual_boundary_without_execution(tmp_path: Pat
     assert packet.execution_boundary.approval_required is True
     assert packet.execution_boundary.local_execution is False
     assert packet.execution_boundary.remote_execution is False
+    assert packet.runner_plan.status == "prepared"
+    assert packet.runner_plan.mode == "local-dry-run"
+    assert packet.runner_plan.lifecycle == ("prepare", "launch", "stream", "cancel", "finish", "report")
+    assert packet.runner_plan.launch_supported is False
+    assert packet.runner_plan.local_execution is False
+    assert packet.runner_plan.remote_execution is False
+    assert packet.runner_plan.artifact_path is not None
+    assert Path(packet.runner_plan.artifact_path).exists()
     assert gate(packet, "memory").status == "checked"
     assert gate(packet, "evidence").status == "skipped"
     assert not (Path(packet.packet_dir) / "evidence").exists()
@@ -267,6 +279,10 @@ def test_execute_packet_prepares_manual_boundary_without_execution(tmp_path: Pat
     assert data["execution_boundary"]["status"] == "awaiting-approval"
     assert data["execution_boundary"]["local_execution"] is False
     assert data["execution_boundary"]["remote_execution"] is False
+    assert data["runner_plan"]["status"] == "prepared"
+    runner_artifact = json.loads(Path(data["runner_plan"]["artifact_path"]).read_text(encoding="utf-8"))
+    assert runner_artifact["task_included"] is False
+    assert runner_artifact["workspace_path_included"] is False
 
 
 def test_execute_packet_refuses_blocked_task(tmp_path: Path) -> None:
@@ -283,6 +299,9 @@ def test_execute_packet_refuses_blocked_task(tmp_path: Path) -> None:
     assert packet.execution_boundary.local_execution is False
     assert packet.execution_boundary.remote_execution is False
     assert packet.gate_run.blocked_gate_ids == ["intent"]
+    assert packet.runner_plan.status == "blocked"
+    assert packet.runner_plan.artifact_path is None
+    assert not (Path(packet.packet_dir) / "runner").exists()
 
 
 def test_handoff_packet_prepares_operator_brief_without_execution(tmp_path: Path) -> None:
@@ -299,6 +318,9 @@ def test_handoff_packet_prepares_operator_brief_without_execution(tmp_path: Path
     assert packet.execution_boundary.mode == "handoff-dry-run"
     assert packet.execution_boundary.local_execution is False
     assert packet.execution_boundary.remote_execution is False
+    assert packet.runner_plan.status == "prepared"
+    assert packet.runner_plan.launch_supported is False
+    assert packet.runner_plan.remote_execution is False
     assert packet.handoff.status == "ready"
     assert packet.handoff.ready is True
     assert packet.handoff.lane == "Codex"
@@ -328,6 +350,36 @@ def test_handoff_packet_refuses_blocked_task(tmp_path: Path) -> None:
     assert packet.handoff.ready is False
     assert packet.handoff.includes_evidence is False
     assert packet.gate_run.blocked_gate_ids == ["intent"]
+
+
+def test_handoff_is_not_ready_after_cancelled_local_run(tmp_path: Path) -> None:
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Prepare a bounded task and cancel it before completion.",
+        agent_id="codex",
+        stage="execute",
+    )
+    latest_run = Path(packet.packet_dir) / "runner" / "latest-run.json"
+    latest_run.write_text(
+        json.dumps(
+            {
+                "schema": RUNNER_RUN_SCHEMA,
+                "run_id": "cancelled-test-run",
+                "status": "cancelled",
+                "local_execution": True,
+                "remote_execution": False,
+                "summary": "Local Codex run was cancelled by the operator.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    handoff = advance_task_packet(tmp_path, packet.packet_id, "handoff")
+
+    assert handoff["execution_boundary"]["status"] == "run-failed"
+    assert handoff["status"] == "needs-review"
+    assert handoff["handoff"]["status"] == "needs-review"
+    assert handoff["handoff"]["ready"] is False
 
 
 def test_packet_detail_loader_returns_full_packet_safely(tmp_path: Path) -> None:
@@ -465,6 +517,7 @@ def test_runtime_state_includes_recent_packets(tmp_path: Path) -> None:
     assert state["recent_packets"][0]["gate_run"]["status"] == "ready"
     assert state["recent_packets"][0]["gate_run"]["completed"] == 3
     assert state["recent_packets"][0]["execution_boundary"]["status"] == "not-prepared"
+    assert state["recent_packets"][0]["runner_plan"]["status"] == "not-prepared"
     assert state["recent_packets"][0]["handoff"]["status"] == "not-prepared"
     assert state["recent_packets"][0]["memory_status"] == "checked"
     assert state["recent_packets"][0]["memory_mode"].startswith("repomori-")
@@ -533,6 +586,8 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert created["packet"]["route"]["remote_execution"] is False
         assert created["packet"]["gate_run"]["status"] == "evidence-attached"
         assert created["packet"]["execution_boundary"]["status"] == "not-prepared"
+        assert created["packet"]["runner_plan"]["status"] == "not-prepared"
+        assert created["packet"]["runner_plan"]["remote_execution"] is False
         assert created["packet"]["handoff"]["status"] == "not-prepared"
 
         query = urlencode({"repo": str(tmp_path)})
@@ -709,6 +764,10 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert execute_created["packet"]["execution_boundary"]["status"] == "awaiting-approval"
         assert execute_created["packet"]["execution_boundary"]["local_execution"] is False
         assert execute_created["packet"]["execution_boundary"]["remote_execution"] is False
+        assert execute_created["packet"]["runner_plan"]["status"] == "prepared"
+        assert execute_created["packet"]["runner_plan"]["mode"] == "local-dry-run"
+        assert execute_created["packet"]["runner_plan"]["launch_supported"] is False
+        assert execute_created["packet"]["runner_plan"]["remote_execution"] is False
 
         with urlopen(f"{base_url}/api/state?{query}", timeout=REQUEST_TIMEOUT_SECONDS) as response:
             execute_state = json.loads(response.read().decode("utf-8"))
@@ -716,6 +775,7 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert execute_state["recent_packets"][0]["packet_id"] == execute_created["packet"]["packet_id"]
         assert execute_state["recent_packets"][0]["stage"] == "execute"
         assert execute_state["recent_packets"][0]["execution_boundary"]["status"] == "awaiting-approval"
+        assert execute_state["recent_packets"][0]["runner_plan"]["status"] == "prepared"
 
         handoff_payload = json.dumps(
             {
@@ -740,6 +800,8 @@ def test_packet_api_creates_packet_and_updates_state(tmp_path: Path) -> None:
         assert handoff_created["packet"]["handoff"]["ready"] is True
         assert handoff_created["packet"]["execution_boundary"]["local_execution"] is False
         assert handoff_created["packet"]["execution_boundary"]["remote_execution"] is False
+        assert handoff_created["packet"]["runner_plan"]["status"] == "prepared"
+        assert handoff_created["packet"]["runner_plan"]["remote_execution"] is False
 
         with urlopen(f"{base_url}/api/state?{query}", timeout=REQUEST_TIMEOUT_SECONDS) as response:
             handoff_state = json.loads(response.read().decode("utf-8"))
@@ -851,9 +913,51 @@ def test_packet_api_reflects_memory_fallback_mode(tmp_path: Path, monkeypatch) -
 def test_static_ui_targets_packet_api() -> None:
     html = (ROOT / "src" / "hamiltonian" / "web" / "index.html").read_text(encoding="utf-8")
     app = (ROOT / "src" / "hamiltonian" / "web" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "src" / "hamiltonian" / "web" / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="packet-list"' in html
     assert 'id="packet-detail"' in html
+    assert "hamiltonian-codex-goals-v1" in html
+    assert 'id="mission-home"' in html
+    assert 'id="local-first-badge"' in html
+    assert "Local-first | remote execution: off" in html
+    assert 'id="simple-run-form"' in html
+    assert 'id="simple-task-input"' in html
+    assert 'data-testid="simple-task"' in html
+    assert 'id="simple-run-button"' in html
+    assert 'id="simple-workspace-name"' in html
+    assert 'data-testid="simple-run"' in html
+    assert 'id="simple-run-status"' in html
+    assert 'data-testid="simple-status"' in html
+    assert 'id="simple-run-options"' in html
+    assert 'id="simple-evidence-toggle"' in html
+    assert 'id="simple-timeout-input"' in html
+    assert 'id="simple-open-manual"' in html
+    assert 'id="simple-open-packet"' in html
+    assert 'id="simple-goal-button"' in html
+    assert 'data-testid="get-codex-goal"' in html
+    assert 'id="goal-dialog"' in html
+    assert 'id="goal-type-maintenance"' in html
+    assert 'id="goal-type-expansion"' in html
+    assert 'id="goal-expansion-input"' in html
+    assert 'id="goal-preview"' in html
+    assert 'id="goal-copy-button"' in html
+    assert 'id="goal-save-button"' in html
+    assert 'id="goal-open-codex-button"' in html
+    assert 'id="goal-review-button"' in html
+    assert 'id="simple-step-check"' in html
+    assert 'id="simple-step-run"' in html
+    assert 'id="simple-step-done"' in html
+    assert "<span>[]</span>" not in html
+    assert 'id="home-recent-packets"' in html
+    assert 'data-page-target="create"' in html
+    assert 'data-pages="create"' in html
+    assert 'id="create-back-home"' in html
+    assert 'id="create-task-count"' in html
+    assert 'id="create-route-title"' in html
+    assert 'id="create-evidence-title"' in html
+    assert 'id="create-boundary-mode"' in html
+    assert 'id="create-review-routes"' in html
     assert 'id="mode-orchestrate"' in html
     assert 'id="mode-recorder"' in html
     assert 'id="recorder-button"' in html
@@ -865,10 +969,14 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'aria-label="Sections"' in html
     assert 'role="tablist"' in html
     assert 'data-page-target="start"' in html
+    assert 'data-icon="home"' in html
+    assert 'data-icon="H"' not in html
     assert 'data-page-target="learn"' in html
+    assert 'data-page-target="recorder"' in html
+    assert 'data-page-target="handoff"' in html
     assert 'data-page-target="advanced"' in html
     assert 'id="mission-map"' in html
-    assert 'data-pages="start map learn"' in html
+    assert 'data-pages="map learn"' in html
     assert 'id="mission-hud"' in html
     assert 'id="mission-hud-count"' in html
     assert 'id="mission-hud-title"' in html
@@ -881,7 +989,7 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="map-current"' in html
     assert 'id="map-action"' in html
     assert 'id="tutorial"' in html
-    assert 'data-pages="start learn"' in html
+    assert 'data-pages="learn"' in html
     assert 'id="tutorial-current"' in html
     assert 'id="tutorial-coach"' in html
     assert 'id="tutorial-action"' in html
@@ -894,14 +1002,143 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'data-stage="execute"' in html
     assert 'id="advanced"' in html
     assert 'data-pages="advanced"' in html
+    assert 'class="panel wide advanced-settings-screen"' in html
+    assert 'id="advanced-tabs"' in html
+    assert 'data-advanced-tab="integrations"' in html
+    assert 'data-advanced-tab="route-scoring"' in html
+    assert 'id="advanced-data-sources"' in html
+    assert 'id="advanced-source-count"' in html
+    assert 'id="advanced-integration-count"' in html
+    assert 'id="advanced-agent-count"' in html
+    assert 'id="advanced-route-recommendation"' in html
+    assert 'id="advanced-route-bars"' in html
+    assert 'id="advanced-evidence-settings"' in html
+    assert 'id="advanced-privacy-settings"' in html
+    assert 'id="advanced-debug-settings"' in html
+    assert 'id="advanced-debug-state"' in html
+    assert 'id="next-build"' in html
     assert 'id="mission-path"' in html
     assert 'id="mission-next"' in html
     assert 'id="route-compass"' in html
     assert 'id="route-list"' in html
-    assert "Live lane recommendations" in html
+    assert "Agent lane selection" in html
+    assert 'class="panel wide agent-lane-screen"' in html
+    assert 'id="route-screen-title"' in html
+    assert 'id="route-recommended-badge"' in html
+    assert 'id="route-impact"' in html
+    assert 'id="route-selection-count"' in html
+    assert 'id="route-override-title"' in html
+    assert 'id="route-override-body"' in html
+    assert 'id="route-selection-summary"' in html
+    assert 'id="route-cancel-button"' in html
+    assert 'id="route-confirm-button"' in html
+    assert 'data-page-target="gates"' in html
+    assert 'class="panel wide gate-readiness-view"' in html
+    assert 'id="gate-view-title"' in html
+    assert 'id="gate-summary-metrics"' in html
+    assert 'id="gate-selected-detail"' in html
+    assert 'id="gate-required-actions"' in html
+    assert 'id="gate-primary-action"' in html
+    assert 'id="gate-back-packet"' in html
+    assert 'class="panel wide flight-recorder-screen"' in html
+    assert 'id="recorder-panel"' in html
+    assert 'data-pages="recorder"' in html
+    assert 'id="recorder-back-packet"' in html
+    assert 'id="recorder-screen-title"' in html
+    assert 'id="recorder-status-badge"' in html
+    assert 'id="recorder-status-title"' in html
+    assert 'id="recorder-task-input"' in html
+    assert 'id="recorder-task-count"' in html
+    assert 'id="recorder-packet-object"' in html
+    assert 'id="recorder-evidence-list"' in html
+    assert 'id="recorder-proof-bundle"' in html
+    assert 'id="recorder-create-button"' in html
+    assert 'id="recorder-open-packet-button"' in html
+    assert 'class="panel wide handoff-export-screen"' in html
+    assert 'id="handoff-panel"' in html
+    assert 'data-pages="handoff"' in html
+    assert 'id="handoff-back-packet"' in html
+    assert 'id="handoff-screen-title"' in html
+    assert 'id="handoff-ready-badge"' in html
+    assert 'id="handoff-ready-title"' in html
+    assert 'id="handoff-readiness-list"' in html
+    assert 'id="handoff-packet-object"' in html
+    assert 'id="handoff-export-summary"' in html
+    assert 'id="handoff-primary-button"' in html
+    assert 'id="handoff-export-button"' in html
+    assert 'id="handoff-open-packet-button"' in html
+    assert 'id="handoff-evidence-state"' in html
+    assert 'id="handoff-share-link-button"' in html
+    assert 'id="handoff-save-vault-button"' in html
+    assert 'id="handoff-footer-note"' in html
+    assert 'Local-first | remote execution: off' in html
     assert 'fetch("/api/packets"' in app
     assert 'fetch("/api/routes"' in app
     assert "function renderRoutes" in app
+    assert 'row.dataset.testid = "route-lane"' in app
+    assert 'useButton.dataset.testid = "select-route-lane"' in app
+    assert "pendingRouteLaneId" in app
+    assert "function routeSelectionLaneId" in app
+    assert "function routeImpactMetric" in app
+    assert "function renderRouteCompass" in app
+    assert "function initRouteSelectionControls" in app
+    assert "function renderMissionHome" in app
+    assert 'const PAGE_ORDER = ["start", "create", "map", "learn", "routes", "gates", "recorder"' in app
+    assert '"handoff", "packets"' in app
+    assert 'cockpit: "create"' in app
+    assert 'gates: "gates"' in app
+    assert '"recorder-panel": "recorder"' in app
+    assert '"handoff-panel": "handoff"' in app
+    assert "function homePacketForDisplay" in app
+    assert "function renderHomeReadiness" in app
+    assert "function renderHomeEvidence" in app
+    assert "function renderHomeRecentPackets" in app
+    assert 'card.dataset.testid = "home-recent-packet"' in app
+    assert "card.dataset.packetId = packet.packet_id" in app
+    assert "function initMissionHomeControls" in app
+    assert "function renderCreatePacketScreen" in app
+    assert "function initCreatePacketControls" in app
+    assert "function recorderPacketForDisplay" in app
+    assert "function renderFlightRecorder" in app
+    assert "function createRecorderPacketFromScreen" in app
+    assert "function initFlightRecorderControls" in app
+    assert "recorder-task-input" in app
+    assert "function handoffPacketForDisplay" in app
+    assert "function handoffExportForPacket" in app
+    assert "has_handoff_export" in app
+    assert "handoff_export_filename" in app
+    assert "function renderHandoffExport" in app
+    assert "function renderHandoffSummary" in app
+    assert "function prepareHandoffPacket" in app
+    assert "function exportHandoffPacket" in app
+    assert "function initHandoffExportControls" in app
+    assert 'activePage === "handoff" && state.data' in app
+    assert "handoff-primary-button" in app
+    assert "handoff-export-button" in app
+    assert "Share links and vault sync are disabled" in app
+    assert "function renderAdvancedSettings" in app
+    assert "function renderAdvancedDataSources" in app
+    assert "function renderAdvancedRouteScoring" in app
+    assert "function renderAdvancedStaticSettings" in app
+    assert "advanced-about-settings" in html
+    assert 'data-advanced-tab="about"' in html
+    assert "Crash diagnostics" in app
+    assert "function initAdvancedSettingsControls" in app
+    assert "function advancedTabTarget" in app
+    assert "advanced-route-score" in app
+    assert "advanced-tab-active" in app
+    assert "AgentLedger stays out unless you attach evidence or use recorder mode." in app
+    assert "function runSimpleMission" in app
+    assert "function cancelSimpleMission" in app
+    assert "function pollSimpleRunner" in app
+    assert "function renderSimpleRunExperience" in app
+    assert "simple-run-button" in app
+    assert "function openGoalBuilder" in app
+    assert "function refreshGoalPreview" in app
+    assert "function ensureGoalSaved" in app
+    assert "function openGoalInCodex" in app
+    assert "function reviewCompletedGoal" in app
+    assert "AgentLedger evidence is represented locally only." in app
     assert "route-strength" in app
     assert "route-boundary" in app
     assert "route-kicker" in app
@@ -952,11 +1189,61 @@ def test_static_ui_targets_packet_api() -> None:
     assert "tutorial-step-action" in app
     assert "guide-focus" in app
     assert "function renderPacketDetail" in app
+    assert "packetDetailTab" in app
+    assert "function renderPacketMissionControl" in app
+    assert "function gateToneName" in app
+    assert "function gateDisplayPacket" in app
+    assert "function renderGateSelectedDetail" in app
+    assert 'row.dataset.testid = "gate-row"' in app
+    assert "function renderGateRequiredActions" in app
+    assert "function initGateViewControls" in app
+    assert ".flight-recorder-screen" in styles
+    assert ".recorder-screen-layout" in styles
+    assert ".recorder-waveform" in styles
+    assert ".recorder-evidence-row" in styles
+    assert ".recorder-footer" in styles
+    assert ".handoff-export-screen" in styles
+    assert ".handoff-screen-layout" in styles
+    assert ".handoff-ready-emblem" in styles
+    assert ".handoff-readiness-row" in styles
+    assert ".handoff-summary-row" in styles
+    assert ".handoff-footer" in styles
+    assert ".advanced-settings-screen" in styles
+    assert ".advanced-tabs" in styles
+    assert ".advanced-settings-layout" in styles
+    assert ".advanced-route-bar" in styles
+    assert ".advanced-setting-row" in styles
+    assert "function packetStatusRows" in app
+    assert 'label: "Runner plan"' in app
+    assert 'row.dataset.testid = `packet-status-${String(item.label' in app
+    assert "function detailPanel" in app
+    assert "function applyPacketDetailTab" in app
+    assert "function initPacketDetailControls" in app
+    assert "AgentLedger is represented as a local placeholder for this packet." in app
     assert "loadPacketDetail(packet.packet_id)" in app
     assert "fetch(`/api/packets/${encodeURIComponent(packetId)}?${params.toString()}`)" in app
     assert 'id="packet-export-button"' in html
+    assert "packet-mission-control" in html
+    assert 'id="packet-control-back"' in html
+    assert 'id="packet-control-local"' in html
+    assert 'id="detail-packet-object"' in html
+    assert 'id="detail-packet-title"' in html
+    assert 'id="detail-evidence-stamp"' in html
+    assert 'id="packet-detail-tabs"' in html
+    assert 'data-packet-tab="overview"' in html
+    assert 'data-packet-tab="gates"' in html
+    assert 'id="packet-status-list"' in html
     assert 'id="packet-command"' in html
     assert 'id="packet-primary-action"' in html
+    assert 'id="packet-runner-control"' in html
+    assert 'data-testid="runner-control"' in html
+    assert 'id="runner-timeout-input"' in html
+    assert 'id="runner-launch-button"' in html
+    assert 'data-testid="runner-launch"' in html
+    assert 'id="runner-cancel-button"' in html
+    assert 'data-testid="runner-cancel"' in html
+    assert 'id="runner-event-list"' in html
+    assert 'id="runner-final-message"' in html
     assert 'id="readiness-strip"' in html
     assert 'id="readiness-detail"' in html
     assert 'id="packet-gate-button"' in html
@@ -983,6 +1270,13 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function updatePacketAdvanceButtons" in app
     assert "function packetCommandState" in app
     assert "function updatePacketCommand" in app
+    assert "function renderRunnerControl" in app
+    assert "function refreshSelectedRunnerRun" in app
+    assert "function launchSelectedRunner" in app
+    assert "function cancelSelectedRunner" in app
+    assert "function initRunnerControls" in app
+    assert "/run/cancel?${params.toString()}" in app
+    assert "/run?${params.toString()}" in app
     assert "function packetActionLockReason" in app
     assert "locked-action" in app
     assert "next-action" in app
@@ -1001,6 +1295,46 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="execute-button"' in html
     assert 'submitPacket("execute")' in app
     assert "Execute: ${executionBoundary.status}" in app
+    assert "Runner: ${runnerPlan.status}" in app
     assert 'id="handoff-button"' in html
     assert 'submitPacket("handoff")' in app
     assert "Handoff: ${handoff.status}" in app
+    assert "--surface-1" in styles
+    assert "--accent: #ff6a00" in styles
+    assert "@media (max-width: 620px)" in styles
+    assert "position: sticky" in styles
+    assert "calc(100% - 150px)" in styles
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles
+    assert ".topbar .eyebrow" in styles
+    assert ".mission-home" in styles
+    assert ".create-packet-screen" in styles
+    assert ".create-layout" in styles
+    assert ".stage-action-grid" in styles
+    assert ".create-side-card" in styles
+    assert ".agent-lane-screen" in styles
+    assert ".lane-screen-layout" in styles
+    assert ".lane-option-card" in styles
+    assert ".lane-option-selected" in styles
+    assert ".lane-selection-footer" in styles
+    assert ".packet-mission-control" in styles
+    assert ".packet-control-layout" in styles
+    assert ".gate-readiness-view" in styles
+    assert ".gate-view-layout" in styles
+    assert ".gate-check-row" in styles
+    assert ".gate-tone-blocked" in styles
+    assert ".gate-summary-metrics" in styles
+    assert ".advanced-card" in styles
+    assert ".advanced-route-top" in styles
+    assert ".advanced-module-list" in styles
+    assert ".packet-status-row" in styles
+    assert ".packet-runner-control" in styles
+    assert ".runner-control-grid" in styles
+    assert ".runner-progress-track" in styles
+    assert ".runner-event-row" in styles
+    assert ".runner-final-message" in styles
+    assert ".detail-panel-section" in styles
+    assert ".packet-detail-tabs button" in styles
+    assert ".mission-packet-object" in styles
+    assert ".home-readiness-list" in styles
+    assert ".home-evidence-option" in styles
+    assert ".home-recent-packets" in styles

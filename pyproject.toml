@@ -4,12 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hamiltonian"
-version = "0.1.0"
+version = "0.2.0"
 description = "Flight software for agentic systems."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Martin Ollett" }]
 dependencies = []
+
+[project.optional-dependencies]
+desktop = ["pywebview==6.2.1"]
+build = ["pyinstaller==6.21.0"]
 
 [project.scripts]
 hamiltonian = "hamiltonian.cli:main"

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Hamiltonian</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=hamiltonian-codex-goals-v1" />
   </head>
   <body>
     <div class="shell">
@@ -17,12 +17,16 @@
           </div>
         </div>
         <nav class="nav" role="tablist" aria-label="Hamiltonian pages">
-          <a class="active" href="#start" data-page-target="start" role="tab" aria-selected="true">Start</a>
-          <a href="#map" data-page-target="map" role="tab" aria-selected="false">Map</a>
-          <a href="#learn" data-page-target="learn" role="tab" aria-selected="false">Learn</a>
-          <a href="#routes" data-page-target="routes" role="tab" aria-selected="false">Routes</a>
-          <a href="#packets" data-page-target="packets" role="tab" aria-selected="false">Packets</a>
-          <a href="#advanced" data-page-target="advanced" role="tab" aria-selected="false">Advanced</a>
+          <a class="active" href="#start" data-page-target="start" data-icon="home" role="tab" aria-selected="true">Start</a>
+          <a href="#packets" data-page-target="packets" data-icon="packets" role="tab" aria-selected="false">Work</a>
+          <a href="#recorder" data-page-target="recorder" data-icon="record" role="tab" aria-selected="false">Recorder</a>
+          <a href="#advanced" data-page-target="advanced" data-icon="settings" role="tab" aria-selected="false">Advanced</a>
+          <a class="nav-secondary" href="#create" data-page-target="create" data-icon="add" role="tab" aria-selected="false">Create</a>
+          <a class="nav-secondary" href="#map" data-page-target="map" data-icon="map" role="tab" aria-selected="false">Map</a>
+          <a class="nav-secondary" href="#learn" data-page-target="learn" data-icon="learn" role="tab" aria-selected="false">Learn</a>
+          <a class="nav-secondary" href="#routes" data-page-target="routes" data-icon="route" role="tab" aria-selected="false">Routes</a>
+          <a class="nav-secondary" href="#gates" data-page-target="gates" data-icon="gate" role="tab" aria-selected="false">Gates</a>
+          <a class="nav-secondary" href="#handoff" data-page-target="handoff" data-icon="handoff" role="tab" aria-selected="false">Handoff</a>
         </nav>
         <div class="rail-foot">
           <span>Current rule</span>
@@ -33,8 +37,12 @@
       <main class="workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Flight software for agentic systems</p>
+            <p class="eyebrow">Hamiltonian</p>
             <h1>Run any agent. Trust none. Keep evidence when it matters.</h1>
+          </div>
+          <div class="top-status" aria-label="Local runtime boundary">
+            <span id="local-first-badge" class="local-first-badge">Local-first | remote execution: off</span>
+            <span id="local-time" class="local-time">Local time</span>
           </div>
           <form id="repo-form" class="repo-form">
             <label for="repo-input">Repo</label>
@@ -43,7 +51,7 @@
           </form>
         </header>
 
-        <section class="status-strip" aria-label="Current runtime status">
+        <section class="status-strip" aria-label="Current runtime status" data-pages="advanced">
           <div>
             <span>Workspace</span>
             <strong id="repo-name">Loading</strong>
@@ -62,7 +70,125 @@
           </div>
         </section>
 
-        <section id="mission-hud" class="mission-hud" aria-label="Current mission objective">
+        <section id="mission-home" class="mission-home simple-home" aria-label="Run local work" data-pages="start">
+          <header class="simple-home-heading">
+            <p class="eyebrow">New local job</p>
+            <h2>What do you want done?</h2>
+          </header>
+
+          <form id="simple-run-form" class="simple-run-surface">
+            <label for="simple-task-input">Task</label>
+            <textarea
+              id="simple-task-input"
+              maxlength="600"
+              spellcheck="true"
+              placeholder="Describe the result you want."
+              data-testid="simple-task"
+            ></textarea>
+            <div class="simple-run-actions">
+              <span id="simple-task-count">0/600</span>
+              <button id="simple-run-button" class="simple-run-button" type="submit" data-testid="simple-run">Run locally</button>
+            </div>
+            <div class="simple-runtime-line" aria-label="Runtime boundary">
+              <span>Codex</span>
+              <span id="simple-workspace-name">Workspace loading</span>
+              <span>Remote execution off</span>
+            </div>
+            <details id="simple-run-options" class="simple-run-options">
+              <summary>Options</summary>
+              <div class="simple-option-grid">
+                <label class="simple-check-option" for="simple-evidence-toggle">
+                  <input id="simple-evidence-toggle" type="checkbox" />
+                  Keep evidence for this job
+                </label>
+                <label for="simple-timeout-input">
+                  Stop after
+                  <select id="simple-timeout-input">
+                    <option value="300">5 minutes</option>
+                    <option value="900" selected>15 minutes</option>
+                    <option value="1800">30 minutes</option>
+                    <option value="3600">1 hour</option>
+                  </select>
+                </label>
+                <button id="simple-open-manual" class="compact-button" type="button">Open manual controls</button>
+              </div>
+            </details>
+          </form>
+
+          <section id="simple-run-status" class="simple-run-status" aria-live="polite" hidden data-testid="simple-status">
+            <div class="simple-status-copy">
+              <span id="simple-status-badge">Waiting</span>
+              <h3 id="simple-status-title">Ready</h3>
+              <p id="simple-status-body"></p>
+            </div>
+            <ol class="simple-progress" aria-label="Job progress">
+              <li id="simple-step-check"><span>1</span><strong>Check</strong></li>
+              <li id="simple-step-run"><span>2</span><strong>Run</strong></li>
+              <li id="simple-step-done"><span>3</span><strong>Done</strong></li>
+            </ol>
+            <pre id="simple-run-result" class="simple-run-result" hidden></pre>
+            <div class="simple-status-actions">
+              <button id="simple-open-packet" class="compact-button" type="button">Open details</button>
+              <button id="simple-goal-button" class="compact-button primary-action" type="button" hidden data-testid="get-codex-goal">Get Codex goal</button>
+            </div>
+          </section>
+
+          <section id="home-recent-panel" class="simple-recent" aria-label="Recent work">
+            <div class="simple-section-head">
+              <h3>Recent work</h3>
+              <button id="home-view-all-packets" class="ghost-link" type="button">View all</button>
+            </div>
+            <div id="home-recent-packets" class="home-recent-packets" aria-live="polite"></div>
+          </section>
+        </section>
+
+        <dialog id="goal-dialog" class="goal-dialog" aria-labelledby="goal-dialog-title">
+          <div class="goal-dialog-head">
+            <div>
+              <p class="eyebrow">Production handoff</p>
+              <h2 id="goal-dialog-title">Create Codex goal</h2>
+            </div>
+            <button id="goal-dialog-close" class="icon-button" type="button" aria-label="Close goal builder">&times;</button>
+          </div>
+
+          <div id="goal-type-control" class="goal-type-control" role="radiogroup" aria-label="Goal type">
+            <button id="goal-type-maintenance" class="goal-type-option goal-type-selected" type="button" role="radio" aria-checked="true">
+              <strong>Maintenance</strong>
+              <span>Raise the current result one defensible step.</span>
+            </button>
+            <button id="goal-type-expansion" class="goal-type-option" type="button" role="radio" aria-checked="false">
+              <strong>Expansion</strong>
+              <span>Add or extend a bounded capability.</span>
+            </button>
+          </div>
+
+          <label id="goal-expansion-field" class="goal-expansion-field" for="goal-expansion-input" hidden>
+            What should become possible?
+            <textarea id="goal-expansion-input" maxlength="2000" placeholder="Describe the capability Codex should add."></textarea>
+          </label>
+
+          <section class="goal-preview-section" aria-label="Generated goal">
+            <div class="goal-preview-head">
+              <div>
+                <span id="goal-target-label">Maintenance goal</span>
+                <strong id="goal-objective">Generating goal...</strong>
+              </div>
+              <span id="goal-grade-change" class="lane-fit">Working</span>
+            </div>
+            <pre id="goal-preview" class="goal-preview" data-testid="goal-preview">Generating goal...</pre>
+          </section>
+
+          <p id="goal-dialog-status" class="goal-dialog-status" aria-live="polite">Goal preview stays local.</p>
+
+          <div class="goal-dialog-actions">
+            <button id="goal-copy-button" class="compact-button" type="button">Copy goal</button>
+            <button id="goal-save-button" class="compact-button" type="button">Save goal</button>
+            <button id="goal-open-codex-button" class="primary-action" type="button">Open in Codex</button>
+            <button id="goal-review-button" class="compact-button" type="button" hidden>Review completed goal</button>
+          </div>
+        </dialog>
+
+        <section id="mission-hud" class="mission-hud" aria-label="Current mission objective" data-pages="map learn">
           <div class="mission-hud-copy">
             <span id="mission-hud-count">Step 1 of 6</span>
             <strong id="mission-hud-title">Tell it the job</strong>
@@ -76,7 +202,7 @@
           </div>
         </section>
 
-        <section id="mission-map" class="panel mission-map-panel" aria-label="Mission map" data-pages="start map learn">
+        <section id="mission-map" class="panel mission-map-panel" aria-label="Mission map" data-pages="map learn">
           <div class="map-brief">
             <div>
               <p class="eyebrow">Mission map</p>
@@ -92,51 +218,117 @@
         </section>
 
         <div class="grid">
-          <section id="cockpit" class="panel command-panel" data-pages="start">
-            <div class="panel-head">
+          <section id="cockpit" class="panel command-panel create-packet-screen wide" data-pages="create">
+            <div class="create-screen-head">
+              <button id="create-back-home" class="compact-button" type="button">Back to Mission Home</button>
               <div>
-                <p class="eyebrow">Task control</p>
-                <h2 id="cockpit-title">Assign bounded work</h2>
+                <p class="eyebrow">Create new packet</p>
+                <h2 id="cockpit-title">Define the mission packet</h2>
               </div>
+              <span class="local-first-badge create-local-badge">Local-first | remote execution: off</span>
             </div>
-            <div class="mode-switch" role="radiogroup" aria-label="Cockpit mode">
-              <label class="mode-choice">
-                <input type="radio" name="cockpit-mode" value="orchestrate" id="mode-orchestrate" checked />
-                Orchestrate
-              </label>
-              <label class="mode-choice">
-                <input type="radio" name="cockpit-mode" value="recorder" id="mode-recorder" />
-                Flight recorder
-              </label>
-            </div>
-            <div id="lane-control">
-              <label for="agent-select" class="eyebrow lane-label">Lane</label>
-              <select id="agent-select" aria-label="Agent lane"></select>
-            </div>
-            <div id="recorder-intro" class="packet-preview" hidden>
-              Flight recorder starts each packet at Record stage with local evidence placeholder.
-            </div>
-            <textarea
-              id="task-input"
-              spellcheck="true"
-              placeholder="Patch the repo, run the proof, and prepare a handoff."
-            ></textarea>
-            <div id="orchestrate-tools" class="command-row">
-              <button id="draft-button" type="button">Draft packet</button>
-              <button id="gate-button" type="button">Gate plan</button>
-              <button id="execute-button" type="button">Prepare execute</button>
-              <button id="handoff-button" type="button">Handoff</button>
-              <button id="record-button" type="button">Attach evidence</button>
-            </div>
-            <div id="recorder-tools" class="command-row" hidden>
-              <button id="recorder-button" type="button">Record flight packet</button>
-            </div>
-            <div id="packet-preview" class="packet-preview">
-              <span>No packet drafted yet.</span>
+
+            <div class="create-layout">
+              <div class="create-main">
+                <section class="create-block create-task-block" aria-label="Mission packet brief">
+                  <div class="create-section-head">
+                    <div>
+                      <span>Task description</span>
+                      <strong>Bound the work before any gate can move.</strong>
+                    </div>
+                    <span id="create-task-count" class="create-count">0/600</span>
+                  </div>
+                  <textarea
+                    id="task-input"
+                    maxlength="600"
+                    spellcheck="true"
+                    placeholder="Patch the repo, run the proof, and prepare a handoff."
+                  ></textarea>
+                </section>
+
+                <section class="create-block" aria-label="Mission setup">
+                  <div class="create-section-head">
+                    <div>
+                      <span>Mission setup</span>
+                      <strong>Choose the mode and local adapter lane.</strong>
+                    </div>
+                  </div>
+                  <div class="mode-switch" role="radiogroup" aria-label="Cockpit mode">
+                    <label class="mode-choice">
+                      <input type="radio" name="cockpit-mode" value="orchestrate" id="mode-orchestrate" checked />
+                      Orchestrate
+                    </label>
+                    <label class="mode-choice">
+                      <input type="radio" name="cockpit-mode" value="recorder" id="mode-recorder" />
+                      Flight recorder
+                    </label>
+                  </div>
+                  <div id="lane-control" class="create-lane-control">
+                    <label for="agent-select" class="eyebrow lane-label">Recommended agent lane</label>
+                    <select id="agent-select" aria-label="Agent lane"></select>
+                  </div>
+                  <div id="recorder-intro" class="packet-preview create-recorder-intro" hidden>
+                    Flight recorder starts each packet at Record stage with local evidence placeholder.
+                  </div>
+                </section>
+
+                <section class="create-block" aria-label="Prepare packet">
+                  <div class="create-section-head">
+                    <div>
+                      <span>Prepare packet</span>
+                      <strong>Pick how far this local packet should be prepared.</strong>
+                    </div>
+                  </div>
+                  <div id="orchestrate-tools" class="command-row stage-action-grid">
+                    <button id="draft-button" type="button">Draft packet</button>
+                    <button id="gate-button" type="button">Gate plan</button>
+                    <button id="execute-button" type="button">Prepare execute</button>
+                    <button id="handoff-button" type="button">Handoff</button>
+                    <button id="record-button" type="button">Attach evidence</button>
+                  </div>
+                  <div id="recorder-tools" class="command-row stage-action-grid recorder-action-grid" hidden>
+                    <button id="recorder-button" type="button">Record flight packet</button>
+                  </div>
+                </section>
+              </div>
+
+              <aside class="create-side" aria-label="Packet preparation status">
+                <section class="create-side-card create-route-preview">
+                  <div class="create-side-head">
+                    <span>Recommended lane</span>
+                    <button id="create-review-routes" class="icon-button" type="button" aria-label="Review route recommendations">&gt;</button>
+                  </div>
+                  <div class="lane-orbit" aria-hidden="true"></div>
+                  <strong id="create-route-title">Waiting for task</strong>
+                  <span id="create-route-fit" class="lane-fit">Local advice</span>
+                  <p id="create-route-body">Write a task and Hamiltonian will refresh local route recommendations.</p>
+                </section>
+
+                <section class="create-side-card create-evidence-preview">
+                  <div class="create-side-head">
+                    <span>Evidence posture</span>
+                    <button id="create-use-recorder" class="icon-button" type="button" aria-label="Switch to flight recorder mode">+</button>
+                  </div>
+                  <strong id="create-evidence-title">Evidence optional</strong>
+                  <p id="create-evidence-body">AgentLedger stays out unless you attach evidence or use recorder mode.</p>
+                </section>
+
+                <section class="create-side-card create-boundary-preview">
+                  <div class="create-side-head">
+                    <span>Runtime boundary</span>
+                    <span id="create-boundary-mode" class="create-mini-chip">Normal orchestration</span>
+                  </div>
+                  <p id="create-boundary-body">Remote execution is off. Packet creation writes local state only.</p>
+                </section>
+
+                <div id="packet-preview" class="packet-preview create-packet-preview">
+                  <span>No packet drafted yet.</span>
+                </div>
+              </aside>
             </div>
           </section>
 
-          <section id="tutorial" class="panel tutorial-panel" data-pages="start learn">
+          <section id="tutorial" class="panel tutorial-panel" data-pages="learn">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Tutorial</p>
@@ -183,27 +375,375 @@
             </ol>
           </section>
 
-          <section id="routes" class="panel" data-pages="routes">
-            <div class="panel-head">
+          <section id="routes" class="panel wide agent-lane-screen" data-pages="routes">
+            <div class="lane-screen-head">
+              <button id="route-back-packet" class="compact-button" type="button">Back to Packet</button>
               <div>
-                <p class="eyebrow">Route control</p>
-                <h2>Live lane recommendations</h2>
+                <p class="eyebrow">Agent lane selection</p>
+                <h2 id="route-screen-title">Select agent lane</h2>
               </div>
+              <span class="local-first-badge">Local-first | remote execution: off</span>
             </div>
-            <div id="route-compass" class="route-compass" aria-live="polite"></div>
-            <div id="route-list" class="route-list"></div>
+
+            <div class="lane-screen-layout">
+              <section class="lane-recommendation-panel" aria-label="Recommended lane">
+                <div class="create-side-head">
+                  <span>Recommended lane</span>
+                  <span id="route-recommended-badge" class="create-mini-chip">Waiting</span>
+                </div>
+                <div id="route-compass" class="route-compass" aria-live="polite"></div>
+                <div id="route-impact" class="route-impact" aria-live="polite"></div>
+              </section>
+
+              <section class="lane-options-panel" aria-label="Available lanes">
+                <div class="create-side-head">
+                  <span>Available lanes</span>
+                  <span id="route-selection-count" class="create-mini-chip">0 lanes</span>
+                </div>
+                <div id="route-list" class="route-list lane-option-list"></div>
+              </section>
+
+              <aside class="lane-override-panel" aria-label="Lane override notice">
+                <section class="lane-override-card">
+                  <div class="create-side-head">
+                    <span>Override notice</span>
+                  </div>
+                  <strong id="route-override-title">Use the recommended lane unless you have a reason.</strong>
+                  <p id="route-override-body">
+                    Selecting a non-recommended lane is allowed, but Hamiltonian keeps the route decision visible in the packet.
+                  </p>
+                </section>
+
+                <section class="lane-local-card">
+                  <strong>Local-only</strong>
+                  <p>Remote execution is disabled. Lane selection records adapter intent only.</p>
+                </section>
+              </aside>
+            </div>
+
+            <footer class="lane-selection-footer">
+              <div>
+                <span>Lane decision</span>
+                <strong id="route-selection-summary">Choose a lane to continue.</strong>
+              </div>
+              <div class="lane-selection-actions">
+                <button id="route-cancel-button" class="compact-button" type="button">Cancel</button>
+                <button id="route-confirm-button" class="compact-button primary-action" type="button" disabled>
+                  Confirm lane
+                </button>
+              </div>
+            </footer>
           </section>
 
-          <section id="gates" class="panel wide" data-pages="map routes">
-            <div class="panel-head">
+          <section id="gates" class="panel wide gate-readiness-view" data-pages="gates">
+            <div class="gate-view-head">
+              <button id="gate-back-packet" class="compact-button" type="button">Back to Packet</button>
               <div>
-                <p class="eyebrow">Runtime path</p>
-                <h2>Memory, policy, execution, proof</h2>
+                <p class="eyebrow">Gate / Readiness View</p>
+                <h2 id="gate-view-title">No packet selected</h2>
               </div>
-              <span id="generated-at" class="timestamp">Waiting</span>
+              <div class="gate-view-status">
+                <span class="local-first-badge">Local-first | remote execution: off</span>
+                <span id="generated-at" class="timestamp">Waiting</span>
+              </div>
             </div>
-            <div id="lifecycle" class="timeline"></div>
-            <div id="gate-list" class="gate-list"></div>
+
+            <div class="gate-view-layout">
+              <section class="gate-main" aria-label="Readiness gate">
+                <div class="gate-summary-card">
+                  <div class="create-side-head">
+                    <span>Readiness gate</span>
+                    <span id="gate-summary-state" class="create-mini-chip">Waiting</span>
+                  </div>
+                  <strong id="gate-summary-title">Open or create a packet</strong>
+                  <p id="gate-summary-body">
+                    Hamiltonian checks route, memory, safety, execution, and evidence before work can move.
+                  </p>
+                  <div id="gate-summary-metrics" class="gate-summary-metrics" aria-label="Readiness status summary"></div>
+                  <button id="gate-primary-action" class="compact-button primary-action" type="button" disabled>
+                    Select packet
+                  </button>
+                </div>
+                <div id="gate-list" class="gate-list gate-readiness-list" aria-live="polite"></div>
+              </section>
+
+              <aside class="gate-side" aria-label="Gate details">
+                <section class="gate-side-card">
+                  <div class="create-side-head">
+                    <span>Selected check</span>
+                  </div>
+                  <div id="gate-selected-detail" class="gate-selected-detail" aria-live="polite"></div>
+                </section>
+
+                <section class="gate-side-card">
+                  <div class="create-side-head">
+                    <span>Required actions</span>
+                  </div>
+                  <div id="gate-required-actions" class="gate-required-actions" aria-live="polite"></div>
+                </section>
+
+                <section class="gate-boundary-banner" aria-label="Runtime boundary">
+                  <strong>Local-first boundary</strong>
+                  <p>All gate state stays on this machine. Remote execution remains off.</p>
+                </section>
+
+                <section class="gate-side-card">
+                  <div class="create-side-head">
+                    <span>Runtime path</span>
+                  </div>
+                  <div id="lifecycle" class="timeline gate-lifecycle"></div>
+                </section>
+              </aside>
+            </div>
+          </section>
+
+          <section id="recorder-panel" class="panel wide flight-recorder-screen" data-pages="recorder">
+            <div class="recorder-screen-head">
+              <button id="recorder-back-packet" class="compact-button" type="button">Back to Packet</button>
+              <div>
+                <p class="eyebrow">Flight recorder mode</p>
+                <h2 id="recorder-screen-title">Maximum evidence capture</h2>
+              </div>
+              <span class="local-first-badge">Local-first | remote execution: off</span>
+            </div>
+
+            <div class="recorder-screen-layout">
+              <section class="recorder-status-panel">
+                <div class="create-side-head">
+                  <span>Mode status</span>
+                  <span id="recorder-status-badge" class="create-mini-chip">Inactive</span>
+                </div>
+                <div class="recorder-waveform" aria-hidden="true">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                <strong id="recorder-status-title">Recorder inactive</strong>
+                <p id="recorder-status-body">Switch to recorder mode when the packet needs a fuller local trace.</p>
+                <button id="recorder-arm-button" class="compact-button primary-action" type="button">
+                  Switch to recorder mode
+                </button>
+              </section>
+
+              <section class="recorder-packet-panel">
+                <div class="create-side-head">
+                  <span>Recorder packet</span>
+                  <span id="recorder-packet-stage" class="create-mini-chip">Waiting</span>
+                </div>
+                <label class="recorder-task-label" for="recorder-task-input">
+                  <span>Mission note</span>
+                  <span id="recorder-task-count">0/600</span>
+                </label>
+                <textarea
+                  id="recorder-task-input"
+                  maxlength="600"
+                  placeholder="Capture decision trace, context, and operator notes."
+                ></textarea>
+                <article id="recorder-packet-object" class="mission-packet-object recorder-packet-object" aria-live="polite">
+                  <div class="packet-spine" aria-hidden="true"></div>
+                  <div class="packet-cover">
+                    <div class="packet-cover-copy">
+                      <span>Recorder packet</span>
+                      <h2 id="recorder-packet-title">No recorder packet yet</h2>
+                      <dl>
+                        <div>
+                          <dt>Stage</dt>
+                          <dd id="recorder-packet-stage-copy">Record</dd>
+                        </div>
+                        <div>
+                          <dt>Objective</dt>
+                          <dd id="recorder-packet-objective">Create a local evidence packet when the work requires it.</dd>
+                        </div>
+                        <div>
+                          <dt>Evidence</dt>
+                          <dd id="recorder-packet-evidence">Optional until recorder mode is used.</dd>
+                        </div>
+                        <div>
+                          <dt>Updated</dt>
+                          <dd id="recorder-packet-updated">Waiting</dd>
+                        </div>
+                      </dl>
+                    </div>
+                    <div id="recorder-packet-code" class="packet-code">M-FR</div>
+                    <div id="recorder-evidence-stamp" class="evidence-stamp">Evidence matters</div>
+                  </div>
+                  <div class="packet-tabs" aria-hidden="true">
+                    <span>Inputs</span>
+                    <span>Context</span>
+                    <span>Tools</span>
+                    <span>Evidence</span>
+                    <span>Proof</span>
+                  </div>
+                  <div id="recorder-packet-id" class="packet-id">Recorder packet not created</div>
+                </article>
+                <button id="recorder-create-button" class="compact-button primary-action" type="button">
+                  Record flight packet
+                </button>
+              </section>
+
+              <aside class="recorder-side" aria-label="Recorder evidence and proof">
+                <section class="recorder-side-card">
+                  <div class="create-side-head">
+                    <span>Evidence capture</span>
+                    <span id="recorder-evidence-mode" class="create-mini-chip">Local</span>
+                  </div>
+                  <div id="recorder-evidence-list" class="recorder-evidence-list" aria-live="polite"></div>
+                </section>
+
+                <section class="recorder-side-card">
+                  <div class="create-side-head">
+                    <span>Proof bundle</span>
+                    <span class="create-mini-chip">No remote</span>
+                  </div>
+                  <div id="recorder-proof-bundle" class="recorder-proof-bundle" aria-live="polite"></div>
+                </section>
+              </aside>
+            </div>
+
+            <footer class="recorder-footer">
+              <div>
+                <span>Note</span>
+                <strong id="recorder-footer-note">Recorder mode is slower and stores more local packet metadata.</strong>
+              </div>
+              <button id="recorder-open-packet-button" class="compact-button" type="button" disabled>
+                Open recorder packet
+              </button>
+            </footer>
+          </section>
+
+          <section id="handoff-panel" class="panel wide handoff-export-screen" data-pages="handoff">
+            <div class="handoff-screen-head">
+              <button id="handoff-back-packet" class="compact-button" type="button">Back to Packet</button>
+              <div>
+                <p class="eyebrow">Handoff ready / Export</p>
+                <h2 id="handoff-screen-title">Packet ready for handoff</h2>
+              </div>
+              <span class="local-first-badge">Local-first | remote execution: off</span>
+            </div>
+
+            <div class="handoff-screen-layout">
+              <section class="handoff-ready-panel">
+                <div class="create-side-head">
+                  <span>Handoff readiness</span>
+                  <span id="handoff-ready-badge" class="create-mini-chip">Waiting</span>
+                </div>
+                <div class="handoff-ready-emblem" aria-hidden="true">
+                  <span></span>
+                </div>
+                <strong id="handoff-ready-title">No packet selected</strong>
+                <p id="handoff-ready-body">Open a packet before exporting a sanitized local handoff.</p>
+                <div id="handoff-readiness-list" class="handoff-readiness-list" aria-live="polite"></div>
+              </section>
+
+              <section class="handoff-packet-panel">
+                <div class="create-side-head">
+                  <span>Handoff packet</span>
+                  <span id="handoff-packet-stage" class="create-mini-chip">Waiting</span>
+                </div>
+                <article id="handoff-packet-object" class="mission-packet-object handoff-packet-object" aria-live="polite">
+                  <div class="packet-spine" aria-hidden="true"></div>
+                  <div class="packet-cover">
+                    <div class="packet-cover-copy">
+                      <span>Operator handoff</span>
+                      <h2 id="handoff-packet-title">No packet selected</h2>
+                      <dl>
+                        <div>
+                          <dt>Stage</dt>
+                          <dd id="handoff-packet-stage-copy">Waiting</dd>
+                        </div>
+                        <div>
+                          <dt>Objective</dt>
+                          <dd id="handoff-packet-objective">Open or prepare a packet for operator review.</dd>
+                        </div>
+                        <div>
+                          <dt>Evidence</dt>
+                          <dd id="handoff-packet-evidence">Optional unless explicitly selected.</dd>
+                        </div>
+                        <div>
+                          <dt>Updated</dt>
+                          <dd id="handoff-packet-updated">Waiting</dd>
+                        </div>
+                      </dl>
+                    </div>
+                    <div id="handoff-packet-code" class="packet-code">M-00</div>
+                    <div id="handoff-evidence-stamp" class="evidence-stamp">Evidence optional</div>
+                  </div>
+                  <div class="packet-tabs" aria-hidden="true">
+                    <span>Brief</span>
+                    <span>Gates</span>
+                    <span>Lane</span>
+                    <span>Evidence</span>
+                    <span>Export</span>
+                  </div>
+                  <div id="handoff-packet-id" class="packet-id">Packet ID not selected</div>
+                </article>
+                <div class="handoff-action-panel">
+                  <div>
+                    <span>Next safe action</span>
+                    <strong id="handoff-next-title">Open a packet</strong>
+                    <p id="handoff-next-body">Select or create a local packet before preparing a handoff.</p>
+                  </div>
+                  <button id="handoff-primary-button" class="compact-button primary-action" type="button" disabled>
+                    Select packet
+                  </button>
+                </div>
+              </section>
+
+              <aside class="handoff-side" aria-label="Export summary and evidence posture">
+                <section class="handoff-side-card">
+                  <div class="create-side-head">
+                    <span>Export summary</span>
+                    <span id="handoff-summary-state" class="create-mini-chip">Waiting</span>
+                  </div>
+                  <div id="handoff-export-summary" class="handoff-export-summary" aria-live="polite"></div>
+                  <div class="handoff-actions">
+                    <button id="handoff-export-button" class="compact-button primary-action" type="button" disabled>
+                      Export packet
+                    </button>
+                    <button id="handoff-open-packet-button" class="compact-button" type="button" disabled>
+                      Open packet
+                    </button>
+                  </div>
+                </section>
+
+                <section class="handoff-side-card">
+                  <div class="create-side-head">
+                    <span>Evidence posture</span>
+                    <span id="handoff-evidence-state" class="create-mini-chip">Optional</span>
+                  </div>
+                  <p id="handoff-evidence-body" class="handoff-side-copy">
+                    AgentLedger stays out unless evidence is selected.
+                  </p>
+                </section>
+
+                <section class="handoff-side-card">
+                  <div class="create-side-head">
+                    <span>Share boundary</span>
+                    <span class="create-mini-chip">Local only</span>
+                  </div>
+                  <div class="handoff-share-actions">
+                    <button id="handoff-share-link-button" class="compact-button" type="button" disabled>Share link</button>
+                    <button id="handoff-save-vault-button" class="compact-button" type="button" disabled>Save to secure vault</button>
+                  </div>
+                  <p class="handoff-side-copy">No public link, remote runner, or external vault is created in this prototype.</p>
+                </section>
+              </aside>
+            </div>
+
+            <footer class="handoff-footer">
+              <div>
+                <span>Status</span>
+                <strong id="handoff-footer-note">Handoff exports are sanitized local files.</strong>
+              </div>
+              <span class="local-first-badge">All mission data stays on this machine.</span>
+            </footer>
           </section>
 
           <section id="runs" class="panel" data-pages="packets">
@@ -227,16 +767,59 @@
             <div id="mission-next" class="mission-note"></div>
           </section>
 
-          <section id="packet-detail-panel" class="panel wide" data-pages="map packets">
-            <div class="panel-head">
+          <section id="packet-detail-panel" class="panel wide packet-mission-control" data-pages="map packets">
+            <div class="packet-control-head">
+              <button id="packet-control-back" class="compact-button" type="button">Back to Packets</button>
               <div>
-                <p class="eyebrow">Packet detail</p>
+                <p class="eyebrow">Packet detail / Mission control</p>
                 <h2 id="packet-detail-title">No packet selected</h2>
               </div>
-              <div class="packet-command-wrap">
-                <div id="packet-command" class="packet-command" aria-live="polite">
+              <span id="packet-control-local" class="local-first-badge">Local-first | remote execution: off</span>
+            </div>
+
+            <div class="packet-control-layout">
+              <div class="packet-control-main">
+                <article id="detail-packet-object" class="mission-packet-object detail-packet-object" aria-live="polite">
+                  <div class="packet-spine" aria-hidden="true"></div>
+                  <div class="packet-cover">
+                    <div class="packet-cover-copy">
+                      <span>Mission control</span>
+                      <h2 id="detail-packet-title">No packet selected</h2>
+                      <dl>
+                        <div>
+                          <dt>Stage</dt>
+                          <dd id="detail-packet-stage">Waiting</dd>
+                        </div>
+                        <div>
+                          <dt>Objective</dt>
+                          <dd id="detail-packet-objective">Open a packet to inspect mission state.</dd>
+                        </div>
+                        <div>
+                          <dt>Lane</dt>
+                          <dd id="detail-packet-lane">No lane selected</dd>
+                        </div>
+                        <div>
+                          <dt>Updated</dt>
+                          <dd id="detail-packet-updated">Waiting</dd>
+                        </div>
+                      </dl>
+                    </div>
+                    <div id="detail-packet-code" class="packet-code">M-00</div>
+                    <div id="detail-evidence-stamp" class="evidence-stamp">Evidence optional</div>
+                  </div>
+                  <div id="packet-detail-tabs" class="packet-tabs packet-detail-tabs" role="tablist" aria-label="Packet detail sections">
+                    <button class="active" type="button" data-packet-tab="overview" role="tab" aria-selected="true">Brief</button>
+                    <button type="button" data-packet-tab="context" role="tab" aria-selected="false">Context</button>
+                    <button type="button" data-packet-tab="gates" role="tab" aria-selected="false">Gates</button>
+                    <button type="button" data-packet-tab="evidence" role="tab" aria-selected="false">Evidence</button>
+                    <button type="button" data-packet-tab="handoff" role="tab" aria-selected="false">Handoff</button>
+                  </div>
+                  <div id="detail-packet-id" class="packet-id">Packet ID not selected</div>
+                </article>
+
+                <div id="packet-command" class="packet-command packet-control-command" aria-live="polite">
                   <div>
-                    <span>Next move</span>
+                    <span>Next recommended action</span>
                     <strong id="packet-command-title">No packet selected</strong>
                     <p id="packet-command-detail">Open or draft a packet.</p>
                   </div>
@@ -244,50 +827,180 @@
                     Select packet
                   </button>
                 </div>
-                <div id="readiness-strip" class="readiness-strip" aria-live="polite"></div>
-                <div id="readiness-detail" class="readiness-detail" aria-live="polite"></div>
-                <div class="panel-actions" aria-label="Packet actions">
-                  <span id="packet-detail-status" class="timestamp">Waiting</span>
-                  <button id="packet-gate-button" class="compact-button" type="button" disabled>Run gates</button>
-                  <button id="packet-execute-button" class="compact-button" type="button" disabled>Prepare execute</button>
-                  <button id="packet-handoff-button" class="compact-button" type="button" disabled>Prepare handoff</button>
-                  <button id="packet-record-button" class="compact-button" type="button" disabled>Attach evidence</button>
-                  <button id="packet-export-button" class="compact-button" type="button" disabled>Export handoff</button>
-                </div>
+
+                <section id="packet-runner-control" class="packet-runner-control" aria-label="Bounded local runner" data-testid="runner-control">
+                  <div class="runner-control-head">
+                    <div>
+                      <span>Bounded local runner</span>
+                      <strong id="runner-control-title">Codex adapter waiting</strong>
+                    </div>
+                    <span id="runner-status-badge" class="pill chip-optional">Not started</span>
+                  </div>
+                  <div class="runner-control-grid">
+                    <div class="runner-control-state">
+                      <dl>
+                        <div>
+                          <dt>Adapter</dt>
+                          <dd id="runner-adapter-state">Unavailable</dd>
+                        </div>
+                        <div>
+                          <dt>Sandbox</dt>
+                          <dd id="runner-sandbox-state">workspace-write</dd>
+                        </div>
+                        <div>
+                          <dt>Boundary</dt>
+                          <dd id="runner-boundary-state">Local process only</dd>
+                        </div>
+                      </dl>
+                      <p id="runner-control-summary">Prepare an execute-stage Codex packet before launching.</p>
+                    </div>
+                    <div class="runner-control-actions">
+                      <label for="runner-timeout-input">Timeout (seconds)</label>
+                      <input id="runner-timeout-input" type="number" min="5" max="3600" step="5" value="900" inputmode="numeric" />
+                      <div>
+                        <button id="runner-launch-button" class="compact-button primary-action" type="button" data-testid="runner-launch" disabled>Launch local run</button>
+                        <button id="runner-cancel-button" class="compact-button" type="button" data-testid="runner-cancel" disabled>Cancel run</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="runner-live-status" aria-live="polite">
+                    <div class="runner-progress-track" aria-hidden="true"><span id="runner-progress-fill"></span></div>
+                    <div id="runner-event-list" class="runner-event-list"></div>
+                    <pre id="runner-final-message" class="runner-final-message" hidden></pre>
+                  </div>
+                  <footer id="runner-control-note">Local workspace process. Remote command execution remains off.</footer>
+                </section>
+
+                <div id="packet-detail" class="packet-detail mission-control-detail"></div>
               </div>
+
+              <aside class="packet-control-side" aria-label="Mission status and readiness">
+                <section class="packet-side-card">
+                  <div class="create-side-head">
+                    <span>Mission status</span>
+                    <span id="packet-detail-status" class="timestamp">Waiting</span>
+                  </div>
+                  <div id="packet-status-list" class="packet-status-list" aria-live="polite"></div>
+                </section>
+
+                <section class="packet-side-card packet-readiness-card">
+                  <div class="create-side-head">
+                    <span>Readiness gate</span>
+                  </div>
+                  <div id="readiness-strip" class="readiness-strip" aria-live="polite"></div>
+                  <div id="readiness-detail" class="readiness-detail" aria-live="polite"></div>
+                </section>
+
+                <section class="packet-side-card">
+                  <div class="create-side-head">
+                    <span>Packet actions</span>
+                  </div>
+                  <div class="panel-actions packet-control-actions" aria-label="Packet actions">
+                    <button id="packet-gate-button" class="compact-button" type="button" disabled>Run gates</button>
+                    <button id="packet-execute-button" class="compact-button" type="button" disabled>Prepare execute</button>
+                    <button id="packet-handoff-button" class="compact-button" type="button" disabled>Prepare handoff</button>
+                    <button id="packet-record-button" class="compact-button" type="button" disabled>Attach evidence</button>
+                    <button id="packet-export-button" class="compact-button" type="button" disabled>Export handoff</button>
+                  </div>
+                </section>
+              </aside>
             </div>
-            <div id="packet-detail" class="packet-detail"></div>
           </section>
 
-          <section id="advanced" class="panel wide advanced-grid" data-pages="advanced">
-            <div>
-              <div class="panel-head">
-                <div>
-                  <p class="eyebrow">Agent lanes</p>
-                  <h2>Workers behind the cockpit</h2>
-                </div>
-              </div>
-              <div id="agent-list" class="lane-list"></div>
-            </div>
-            <div>
-              <div class="panel-head">
-                <div>
-                  <p class="eyebrow">Tool mesh</p>
-                  <h2>Local modules</h2>
-                </div>
-              </div>
-              <div id="integration-list" class="integration-list"></div>
-            </div>
-          </section>
-
-          <section id="next-build" class="panel" data-pages="advanced">
-            <div class="panel-head">
+          <section id="advanced" class="panel wide advanced-settings-screen" data-pages="advanced">
+            <div class="advanced-screen-head">
               <div>
-                <p class="eyebrow">Next build</p>
-                <h2>Market wedge</h2>
+                <p class="eyebrow">Advanced / Settings area</p>
+                <h2>Local controls and diagnostics</h2>
               </div>
+              <span class="local-first-badge">Local-first | remote execution: off</span>
             </div>
-            <ol id="next-actions" class="action-list"></ol>
+
+            <nav id="advanced-tabs" class="advanced-tabs" aria-label="Advanced settings sections">
+              <button class="advanced-tab-active" type="button" data-advanced-tab="integrations">Integrations</button>
+              <button type="button" data-advanced-tab="workspace">Repo &amp; Workspace</button>
+              <button type="button" data-advanced-tab="privacy">Privacy &amp; Sanitization</button>
+              <button type="button" data-advanced-tab="adapters">Adapters</button>
+              <button type="button" data-advanced-tab="route-scoring">Route scoring</button>
+              <button type="button" data-advanced-tab="export">Export</button>
+              <button type="button" data-advanced-tab="debug">Dev / Debug</button>
+              <button type="button" data-advanced-tab="about">About</button>
+            </nav>
+
+            <div class="advanced-settings-layout">
+              <section class="advanced-card advanced-data-card">
+                <div class="create-side-head">
+                  <span>Data sources</span>
+                  <span id="advanced-source-count" class="create-mini-chip">Local</span>
+                </div>
+                <div id="advanced-data-sources" class="advanced-status-list" aria-live="polite"></div>
+              </section>
+
+              <section class="advanced-card advanced-integrations-card">
+                <div class="create-side-head">
+                  <span>Local modules</span>
+                  <span id="advanced-integration-count" class="create-mini-chip">Checking</span>
+                </div>
+                <div id="integration-list" class="integration-list advanced-module-list"></div>
+              </section>
+
+              <section class="advanced-card advanced-adapter-card">
+                <div class="create-side-head">
+                  <span>Adapter status</span>
+                  <span id="advanced-agent-count" class="create-mini-chip">0 lanes</span>
+                </div>
+                <div id="agent-list" class="lane-list advanced-agent-list"></div>
+              </section>
+
+              <section class="advanced-card advanced-route-card">
+                <div class="create-side-head">
+                  <span>Route scoring insight</span>
+                  <span id="advanced-route-state" class="create-mini-chip">Waiting</span>
+                </div>
+                <div id="advanced-route-recommendation" class="advanced-route-recommendation"></div>
+                <div id="advanced-route-bars" class="advanced-route-bars" aria-live="polite"></div>
+              </section>
+
+              <section class="advanced-card advanced-evidence-card">
+                <div class="create-side-head">
+                  <span>Evidence &amp; log settings</span>
+                  <span class="create-mini-chip">Local</span>
+                </div>
+                <div id="advanced-evidence-settings" class="advanced-setting-list"></div>
+              </section>
+
+              <section class="advanced-card advanced-privacy-card">
+                <div class="create-side-head">
+                  <span>Privacy &amp; sanitization</span>
+                  <span class="create-mini-chip">Enforced</span>
+                </div>
+                <div id="advanced-privacy-settings" class="advanced-setting-list"></div>
+              </section>
+
+              <section class="advanced-card advanced-debug-card">
+                <div class="create-side-head">
+                  <span>Developer / Debug</span>
+                  <span id="advanced-debug-state" class="create-mini-chip">Off</span>
+                </div>
+                <div id="advanced-debug-settings" class="advanced-setting-list"></div>
+              </section>
+
+              <section class="advanced-card advanced-about-card">
+                <div class="create-side-head">
+                  <span>About Hamiltonian</span>
+                  <span class="create-mini-chip">Local</span>
+                </div>
+                <div id="advanced-about-settings" class="advanced-setting-list"></div>
+              </section>
+
+              <section id="next-build" class="advanced-card advanced-next-card">
+                <div class="create-side-head">
+                  <span>Next build</span>
+                  <span class="create-mini-chip">Roadmap</span>
+                </div>
+                <ol id="next-actions" class="action-list advanced-next-actions"></ol>
+              </section>
+            </div>
           </section>
         </div>
       </main>
@@ -312,6 +1025,6 @@
       </section>
     </div>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=hamiltonian-design-v1-shell-7"></script>
   </body>
 </html>
