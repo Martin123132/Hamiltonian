@@ -96,6 +96,13 @@ if (-not (Test-Path $Executable)) {
 }
 
 $Version = (& $Python -c "import hamiltonian; print(hamiltonian.__version__)").Trim()
+$SourceCommit = (& git -C $ProjectRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+if (-not $SourceCommit) {
+    $SourceCommit = "unavailable"
+}
+$SourceCommit = $SourceCommit.Trim()
+$SourceStatus = (& git -C $ProjectRoot status --porcelain 2>$null) -join "`n"
+$SourceDirty = -not [string]::IsNullOrWhiteSpace($SourceStatus)
 $ExecutableInfo = Get-Item $Executable
 $ExecutableHash = (Get-FileHash $Executable -Algorithm SHA256).Hash.ToLowerInvariant()
 $BuildInfoPath = Join-Path $ExecutableInfo.DirectoryName "build-info.json"
@@ -103,6 +110,8 @@ $ChecksumPath = Join-Path $ExecutableInfo.DirectoryName "SHA256SUMS.txt"
 $BuildInfo = [ordered]@{
     schema = "hamiltonian.desktop-build.v1"
     version = $Version
+    source_commit = $SourceCommit
+    source_dirty = $SourceDirty
     built_at = [DateTime]::UtcNow.ToString("o")
     package = "windows-portable-onedir"
     executable = "Hamiltonian.exe"
@@ -124,6 +133,42 @@ $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     $Utf8NoBom
 )
 
+$ArchiveName = "Hamiltonian-windows-x64-$Version.zip"
+$ArchivePath = Join-Path $OutputRoot $ArchiveName
+if (Test-Path $ArchivePath) {
+    Remove-Item -LiteralPath $ArchivePath -Force
+}
+Compress-Archive -Path (Join-Path $ExecutableInfo.DirectoryName "*") -DestinationPath $ArchivePath -CompressionLevel Optimal
+$ArchiveInfo = Get-Item $ArchivePath
+$ArchiveHash = (Get-FileHash $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$ReleaseManifestName = "Hamiltonian-windows-x64-$Version.release.json"
+$ReleaseManifestPath = Join-Path $OutputRoot $ReleaseManifestName
+$ReleaseChecksumName = "Hamiltonian-windows-x64-$Version.sha256"
+$ReleaseChecksumPath = Join-Path $OutputRoot $ReleaseChecksumName
+$ReleaseManifest = [ordered]@{
+    schema = "hamiltonian.desktop-release.v1"
+    version = $Version
+    source_commit = $SourceCommit
+    source_dirty = $SourceDirty
+    built_at = $BuildInfo.built_at
+    artifact = $ArchiveName
+    artifact_size = $ArchiveInfo.Length
+    artifact_sha256 = $ArchiveHash
+    package = "windows-portable-zip"
+    signed = $false
+    remote_update = $false
+}
+[System.IO.File]::WriteAllText(
+    $ReleaseManifestPath,
+    ($ReleaseManifest | ConvertTo-Json -Depth 4) + [Environment]::NewLine,
+    $Utf8NoBom
+)
+[System.IO.File]::WriteAllText(
+    $ReleaseChecksumPath,
+    "$ArchiveHash  $ArchiveName$([Environment]::NewLine)",
+    $Utf8NoBom
+)
+
 $DataRoot = [System.IO.Path]::GetFullPath($DataRoot)
 New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
 $ShortcutPath = Join-Path $OutputRoot "Hamiltonian.lnk"
@@ -138,4 +183,6 @@ $Shortcut.Save()
 
 Write-Output "Hamiltonian desktop build: $Executable"
 Write-Output "Build manifest: $BuildInfoPath"
+Write-Output "Portable archive: $ArchivePath"
+Write-Output "Release manifest: $ReleaseManifestPath"
 Write-Output "D-drive shortcut: $ShortcutPath"

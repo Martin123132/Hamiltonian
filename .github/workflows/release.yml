@@ -1,0 +1,101 @@
+name: Package Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to package
+        required: true
+        type: string
+      publish:
+        description: Attach the unsigned package to the private GitHub release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  package:
+    name: Build release package
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Verify tag matches package version
+        shell: powershell
+        run: |
+          $packageVersion = python -c "import pathlib, re; text = pathlib.Path('src/hamiltonian/__init__.py').read_text(); print(re.search('([0-9]+\.[0-9]+\.[0-9]+)', text).group(1))"
+          $tagVersion = $env:RELEASE_TAG.TrimStart('v')
+          if ($packageVersion -ne $tagVersion) { throw "Tag $tagVersion does not match package $packageVersion" }
+      - name: Build portable desktop package
+        shell: powershell
+        run: >-
+          .\scripts\build-windows-app.ps1
+          -OutputRoot "${{ runner.temp }}\HamiltonianBuild"
+          -DataRoot "${{ runner.temp }}\HamiltonianData"
+      - name: Verify release manifest and checksum
+        shell: powershell
+        run: |
+          $root = "${{ runner.temp }}\HamiltonianBuild"
+          $manifestPath = Get-ChildItem $root -Filter "*.release.json" | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $manifestPath) { throw "Release manifest was not produced" }
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $artifact = Join-Path $root $manifest.artifact
+          if (-not (Test-Path $artifact)) { throw "Release artifact was not produced" }
+          $actual = (Get-FileHash $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          if ($actual -ne $manifest.artifact_sha256) { throw "Release artifact checksum mismatch" }
+          if ($manifest.source_commit -ne $sourceCommit) { throw "Release source commit mismatch" }
+          if ($manifest.source_dirty) { throw "Release artifact came from a dirty worktree" }
+          if ($manifest.signed) { throw "Unsigned prototype build unexpectedly claims signing" }
+      - name: Upload package for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hamiltonian-release-${{ env.RELEASE_TAG }}
+          path: |
+            ${{ runner.temp }}\HamiltonianBuild\Hamiltonian-windows-x64-*.zip
+            ${{ runner.temp }}\HamiltonianBuild\Hamiltonian-windows-x64-*.release.json
+            ${{ runner.temp }}\HamiltonianBuild\Hamiltonian-windows-x64-*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish:
+    name: Publish approved release assets
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download reviewed package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hamiltonian-release-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/HamiltonianRelease
+      - name: Create or update private release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(find "${{ runner.temp }}/HamiltonianRelease" -maxdepth 1 -type f -print)
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" --generate-notes --title "Hamiltonian $RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          fi
