@@ -27,9 +27,11 @@ const state = {
   comparisonPollTimer: null,
   comparisonPollSeq: 0,
   comparison: null,
+  comparisons: [],
   goalPreviewTimer: null,
   goalHistoryTimer: null,
   goalDraft: null,
+  goalSource: null,
   goals: [],
   activeReviewGoalId: null,
   appInfo: null,
@@ -2276,6 +2278,56 @@ function renderHomeRecentPackets(data) {
   });
 }
 
+function comparisonDecisionLabel(decision) {
+  if (!decision) return "Awaiting decision";
+  if (decision.status === "neither") return "Neither selected";
+  return `${String(decision.selected_lane_id || "Result").replace(/^./, (letter) => letter.toUpperCase())} selected`;
+}
+
+function renderComparisonHistory() {
+  const list = $("#comparison-history-list");
+  if (!list) return;
+  clear(list);
+  const comparisons = state.comparisons || [];
+  const undecided = comparisons.filter((comparison) => !comparison.decision).length;
+  setText(
+    "#comparison-history-summary",
+    undecided ? `${undecided} need a decision` : comparisons.length ? `${comparisons.length} saved locally` : "No comparisons yet",
+  );
+  if (!comparisons.length) {
+    const empty = document.createElement("p");
+    empty.className = "goal-history-empty";
+    empty.textContent = "Completed Codex and Hermes comparisons will appear here.";
+    list.appendChild(empty);
+    return;
+  }
+  comparisons.slice(0, 8).forEach((comparison) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "comparison-history-row";
+    row.dataset.comparisonId = comparison.comparison_id;
+    row.dataset.testid = "comparison-history-row";
+    row.addEventListener("click", () => {
+      openSavedComparison(comparison.comparison_id).catch((error) => {
+        setText("#comparison-history-summary", error.message);
+      });
+    });
+    const identity = document.createElement("span");
+    identity.className = "comparison-history-identity";
+    const title = document.createElement("strong");
+    title.textContent = `${comparison.primary?.lane_name || "First result"} vs ${comparison.secondary?.lane_name || "Second result"}`;
+    const fingerprint = document.createElement("small");
+    fingerprint.textContent = `${comparison.comparison_id} | ${String(comparison.task_digest || "").slice(0, 12)}...`;
+    identity.append(title, fingerprint);
+    const decision = document.createElement("span");
+    decision.className = "comparison-history-decision";
+    decision.dataset.status = comparison.decision?.status || "pending";
+    decision.textContent = comparisonDecisionLabel(comparison.decision);
+    row.append(identity, decision);
+    list.appendChild(row);
+  });
+}
+
 function goalStatusLabel(status) {
   return {
     "awaiting-codex": "Waiting for Codex",
@@ -2621,11 +2673,17 @@ function renderSimpleRunExperience() {
 }
 
 function goalPayload() {
+  const source = state.goalSource || {
+    report: state.simpleRun.result || "",
+    packetId: state.simpleRun.packetId || null,
+    comparisonId: null,
+  };
   return {
     repo: $("#repo-input").value || state.repo,
     goal_type: state.goalDraft?.goalType || "maintenance",
-    source_report: state.simpleRun.result || "",
-    source_packet_id: state.simpleRun.packetId || null,
+    source_report: source.report,
+    source_packet_id: source.packetId,
+    source_comparison_id: source.comparisonId,
     expansion_request: $("#goal-expansion-input")?.value.trim() || null,
     goal_id: state.goalDraft?.preview?.goal_id || state.goalDraft?.saved?.goal_id || null,
     parent_goal_id: state.goalDraft?.preview?.parent_goal_id || state.goalDraft?.saved?.parent_goal_id || null,
@@ -2806,6 +2864,7 @@ function selectGoalType(goalType) {
 
 function openGoalBuilder() {
   if (!(state.simpleRun.status === "succeeded" && state.simpleRun.result)) return;
+  state.goalSource = null;
   state.goalDraft = { goalType: "maintenance", preview: null, saved: null };
   const expansionInput = $("#goal-expansion-input");
   if (expansionInput) expansionInput.value = "";
@@ -2824,6 +2883,16 @@ function comparisonReceiptLabel(receipt) {
   return `${duration}s | ${Number(receipt.result_length || 0)} characters | ${receipt.result_digest.slice(0, 12)}...`;
 }
 
+function comparisonSideForLane(comparison, laneId) {
+  if (comparison.primaryLaneId === laneId) {
+    return { packetId: comparison.primaryPacketId, result: comparison.primaryResult, available: comparison.primaryAvailable !== false };
+  }
+  if (comparison.secondaryLaneId === laneId) {
+    return { packetId: comparison.secondaryPacketId, result: comparison.secondaryResult, available: comparison.secondaryAvailable !== false };
+  }
+  return null;
+}
+
 function renderComparisonDialog() {
   const comparison = state.comparison;
   if (!comparison) return;
@@ -2833,10 +2902,14 @@ function renderComparisonDialog() {
   if (boundary) boundary.dataset.status = comparison.status;
   setText("#comparison-primary-name", comparison.primaryName || "First agent");
   setText("#comparison-secondary-name", comparison.secondaryName || secondaryAdapter.name);
-  setText("#comparison-primary-result", comparison.primaryResult || "No final response was returned.");
+  setText("#comparison-dialog-title", comparison.source === "history" ? "Review saved comparison" : "Compare agent results");
+  setText(
+    "#comparison-primary-result",
+    comparison.primaryResult || comparison.primaryUnavailableReason || "No final response was returned.",
+  );
   setText(
     "#comparison-secondary-result",
-    comparison.secondaryResult || (active ? "Second agent is working..." : "Not run yet."),
+    comparison.secondaryResult || comparison.secondaryUnavailableReason || (active ? "Second agent is working..." : "Not run yet."),
   );
   setText("#comparison-primary-receipt", comparisonReceiptLabel(comparison.primaryReceipt));
   setText(
@@ -2884,6 +2957,7 @@ function renderComparisonDialog() {
 
   const runButton = $("#comparison-run-button");
   if (runButton) {
+    runButton.hidden = comparison.source === "history";
     runButton.textContent = comparison.status === "complete" ? "Comparison saved" : `Run ${secondaryAdapter.name} once`;
     runButton.disabled =
       active || comparison.status === "loading" || comparison.status === "complete" || !secondaryAdapter.available;
@@ -2892,6 +2966,31 @@ function renderComparisonDialog() {
   if (cancelButton) cancelButton.textContent = active ? "Stop second run" : "Close";
   const closeButton = $("#comparison-dialog-close");
   if (closeButton) closeButton.disabled = active;
+
+  const decisionPanel = $("#comparison-decision");
+  if (decisionPanel) decisionPanel.hidden = !comparison.comparisonId;
+  const selectedLane = comparison.pendingDecision || comparison.decision?.selected_lane_id || (comparison.decision?.status === "neither" ? "neither" : null);
+  ["codex", "hermes", "neither"].forEach((laneId) => {
+    const button = $(`#comparison-select-${laneId}`);
+    if (!button) return;
+    const selected = selectedLane === laneId;
+    button.classList.toggle("comparison-option-selected", selected);
+    button.setAttribute("aria-checked", String(selected));
+    const side = laneId === "neither" ? { available: true } : comparisonSideForLane(comparison, laneId);
+    button.disabled = active || !side?.available;
+  });
+  setText("#comparison-decision-state", comparisonDecisionLabel(comparison.decision));
+  const saveDecision = $("#comparison-save-decision");
+  if (saveDecision) saveDecision.disabled = !comparison.comparisonId || !selectedLane || active;
+  const createGoal = $("#comparison-create-goal");
+  if (createGoal) {
+    const chosen = comparison.decision?.status === "selected"
+      ? comparisonSideForLane(comparison, comparison.decision.selected_lane_id)
+      : null;
+    createGoal.disabled = !chosen?.available || !chosen?.result;
+  }
+  const exportButton = $("#comparison-export");
+  if (exportButton) exportButton.disabled = !comparison.comparisonId || active;
 }
 
 async function openComparisonDialog() {
@@ -2914,6 +3013,11 @@ async function openComparisonDialog() {
     secondaryReceipt: null,
     task: "",
     comparisonId: null,
+    source: "new",
+    decision: null,
+    pendingDecision: null,
+    primaryAvailable: true,
+    secondaryAvailable: true,
     error: "",
   };
   $("#comparison-dialog")?.showModal();
@@ -2931,6 +3035,119 @@ async function openComparisonDialog() {
   state.comparison.primaryReceipt = runPayload.run.result_receipt || null;
   state.comparison.status = secondaryAdapter.available ? "preview" : "unavailable";
   renderComparisonDialog();
+}
+
+async function openSavedComparison(comparisonId) {
+  state.comparison = {
+    status: "loading",
+    source: "history",
+    comparisonId,
+    primaryName: "First agent",
+    secondaryName: "Second agent",
+    primaryResult: "",
+    secondaryResult: "",
+    primaryReceipt: null,
+    secondaryReceipt: null,
+    decision: null,
+    pendingDecision: null,
+    error: "",
+  };
+  $("#comparison-decision-reason").value = "";
+  $("#comparison-dialog")?.showModal();
+  renderComparisonDialog();
+  const params = _queryRepoParams();
+  const response = await fetch(`/api/comparisons/${encodeURIComponent(comparisonId)}?${params.toString()}`);
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not reopen the saved comparison.");
+  const comparison = payload.comparison;
+  const primaryResult = payload.results?.primary || {};
+  const secondaryResult = payload.results?.secondary || {};
+  state.comparison = {
+    status: "complete",
+    source: "history",
+    comparisonId: comparison.comparison_id,
+    primaryPacketId: comparison.primary.packet_id,
+    primaryLaneId: comparison.primary.lane_id,
+    primaryName: comparison.primary.lane_name,
+    primaryResult: primaryResult.result || "",
+    primaryReceipt: comparison.primary,
+    primaryAvailable: Boolean(primaryResult.available),
+    primaryUnavailableReason: primaryResult.reason || "",
+    secondaryPacketId: comparison.secondary.packet_id,
+    secondaryLaneId: comparison.secondary.lane_id,
+    secondaryName: comparison.secondary.lane_name,
+    secondaryResult: secondaryResult.result || "",
+    secondaryReceipt: comparison.secondary,
+    secondaryAvailable: Boolean(secondaryResult.available),
+    secondaryUnavailableReason: secondaryResult.reason || "",
+    decision: comparison.decision || null,
+    pendingDecision: comparison.decision?.selected_lane_id || (comparison.decision?.status === "neither" ? "neither" : null),
+    error: !primaryResult.available || !secondaryResult.available ? "One or more original answers are unavailable." : "",
+  };
+  $("#comparison-decision-reason").value = comparison.decision?.reason || "";
+  renderComparisonDialog();
+}
+
+function selectComparisonDecision(laneId) {
+  if (!state.comparison?.comparisonId) return;
+  state.comparison.pendingDecision = laneId;
+  renderComparisonDialog();
+}
+
+async function saveComparisonDecision() {
+  const comparison = state.comparison;
+  if (!comparison?.comparisonId || !comparison.pendingDecision) return;
+  const response = await fetch(`/api/comparisons/${encodeURIComponent(comparison.comparisonId)}/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      repo: $("#repo-input").value || state.repo,
+      selected_lane_id: comparison.pendingDecision,
+      reason: $("#comparison-decision-reason")?.value.trim() || "",
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not save the comparison decision.");
+  comparison.decision = payload.comparison.decision;
+  comparison.pendingDecision = payload.comparison.decision.selected_lane_id || "neither";
+  setText("#comparison-dialog-status", "Decision saved locally. No model was called.");
+  state.comparisons = state.comparisons.map((item) =>
+    item.comparison_id === comparison.comparisonId ? payload.comparison : item,
+  );
+  renderComparisonHistory();
+  renderComparisonDialog();
+}
+
+function openGoalBuilderFromComparison() {
+  const comparison = state.comparison;
+  const laneId = comparison?.decision?.selected_lane_id;
+  const chosen = laneId ? comparisonSideForLane(comparison, laneId) : null;
+  if (!comparison?.comparisonId || !chosen?.available || !chosen.result) return;
+  state.goalSource = {
+    report: chosen.result,
+    packetId: chosen.packetId,
+    comparisonId: comparison.comparisonId,
+  };
+  state.goalDraft = { goalType: "maintenance", preview: null, saved: null };
+  const expansionInput = $("#goal-expansion-input");
+  if (expansionInput) expansionInput.value = "";
+  $("#comparison-dialog")?.close();
+  renderGoalBuilder();
+  $("#goal-dialog")?.showModal();
+  scheduleGoalPreview(0);
+}
+
+async function exportComparison() {
+  const comparison = state.comparison;
+  if (!comparison?.comparisonId) return;
+  const response = await fetch(`/api/comparisons/${encodeURIComponent(comparison.comparisonId)}/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: $("#repo-input").value || state.repo }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not export the comparison receipt.");
+  setText("#comparison-dialog-status", `${payload.export.filename} saved locally without answer text.`);
 }
 
 function clearComparisonPoll() {
@@ -3294,6 +3511,7 @@ function renderMissionHome(data) {
   renderSimpleLanePicker(data);
   renderSimpleRunExperience();
   renderHomeRecentPackets(data);
+  renderComparisonHistory();
   renderGoalHistory();
 }
 
@@ -5166,6 +5384,17 @@ function initComparisonControls() {
     });
   }
 
+  ["codex", "hermes", "neither"].forEach((laneId) => {
+    $(`#comparison-select-${laneId}`)?.addEventListener("click", () => selectComparisonDecision(laneId));
+  });
+  $("#comparison-save-decision")?.addEventListener("click", () => {
+    saveComparisonDecision().catch((error) => setText("#comparison-dialog-status", error.message));
+  });
+  $("#comparison-create-goal")?.addEventListener("click", openGoalBuilderFromComparison);
+  $("#comparison-export")?.addEventListener("click", () => {
+    exportComparison().catch((error) => setText("#comparison-dialog-status", error.message));
+  });
+
   const closeComparison = () => {
     if (comparisonIsActive()) {
       cancelComparisonRun().catch((error) => {
@@ -5326,19 +5555,22 @@ async function load(repo) {
   const params = new URLSearchParams();
   if (repo) params.set("repo", repo);
   window.clearTimeout(state.goalHistoryTimer);
-  const [response, healthResponse, goalsResponse] = await Promise.all([
+  const [response, healthResponse, goalsResponse, comparisonsResponse] = await Promise.all([
     fetch(`/api/state?${params.toString()}`),
     fetch("/api/health"),
     fetch(`/api/goals?${params.toString()}`),
+    fetch(`/api/comparisons?${params.toString()}`),
   ]);
-  const [data, health, goalsPayload] = await Promise.all([
+  const [data, health, goalsPayload, comparisonsPayload] = await Promise.all([
     response.json(),
     healthResponse.json(),
     goalsResponse.json(),
+    comparisonsResponse.json(),
   ]);
   if (!response.ok || data.error) throw new Error(data.error || "State request failed");
   if (healthResponse.ok && !health.error) state.appInfo = health;
   state.goals = goalsResponse.ok && !goalsPayload.error ? goalsPayload.goals || [] : [];
+  state.comparisons = comparisonsResponse.ok && !comparisonsPayload.error ? comparisonsPayload.comparisons || [] : [];
   state.repo = data.repo;
   render(data);
   state.goalHistoryTimer = window.setTimeout(() => {

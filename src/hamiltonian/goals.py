@@ -10,6 +10,7 @@ import subprocess
 from typing import Any
 from uuid import uuid4
 
+from .comparisons import get_result_comparison
 from .core import ensure_repo, is_git_repo, run_capture, write_text
 from .runners import probe_codex_command
 
@@ -316,6 +317,7 @@ class GoalPackage:
     parent_goal_id: str | None = None
     lineage_root_id: str | None = None
     correction_index: int = 0
+    source_comparison_id: str | None = None
 
 
 def _objective(
@@ -348,6 +350,7 @@ def _goal_markdown(
     parent_goal_id: str | None,
     lineage_root_id: str | None,
     correction_index: int,
+    source_comparison_id: str | None,
 ) -> str:
     maintenance_instructions = [
         "Prioritize the highest-severity confirmed findings that directly improve reliability and trust.",
@@ -395,6 +398,7 @@ def _goal_markdown(
         *(f"- Parent goal: `{parent_goal_id}`" for _ in [0] if parent_goal_id),
         *(f"- Lineage root: `{lineage_root_id}`" for _ in [0] if lineage_root_id),
         *(f"- Correction: `{correction_index}`" for _ in [0] if correction_index),
+        *(f"- Source comparison: `{source_comparison_id}`" for _ in [0] if source_comparison_id),
         "",
         "## Workspace Lock",
         "",
@@ -462,6 +466,7 @@ def preview_goal_package(
     expansion_request: str | None = None,
     goal_id: str | None = None,
     parent_goal_id: str | None = None,
+    source_comparison_id: str | None = None,
 ) -> GoalPackage:
     repo = ensure_repo(repo_path)
     normalized_type = goal_type.lower().strip()
@@ -491,6 +496,15 @@ def preview_goal_package(
     elif parent_id:
         raise ValueError("parent_goal_id is only valid for corrective goals")
 
+    comparison_id = source_comparison_id.strip() if source_comparison_id else None
+    if comparison_id:
+        comparison = get_result_comparison(repo, comparison_id)
+        decision = comparison.get("decision") if isinstance(comparison.get("decision"), dict) else {}
+        if decision.get("status") != "selected":
+            raise ValueError("comparison must have a selected result before creating a goal")
+        if decision.get("selected_packet_id") != source_packet_id:
+            raise ValueError("goal source packet does not match the comparison decision")
+
     clean_id = _clean_goal_id(goal_id)
     if lineage_root_id is None:
         lineage_root_id = clean_id
@@ -516,6 +530,7 @@ def preview_goal_package(
         parent_goal_id=parent_id,
         lineage_root_id=lineage_root_id,
         correction_index=correction_index,
+        source_comparison_id=comparison_id,
     )
     review_prompt = (
         f"Review completed Codex goal {clean_id} in this repository. Read "
@@ -550,6 +565,7 @@ def preview_goal_package(
         parent_goal_id=parent_id,
         lineage_root_id=lineage_root_id,
         correction_index=correction_index,
+        source_comparison_id=comparison_id,
     )
 
 
@@ -586,6 +602,7 @@ def create_goal_package(
     expansion_request: str | None = None,
     goal_id: str | None = None,
     parent_goal_id: str | None = None,
+    source_comparison_id: str | None = None,
 ) -> GoalPackage:
     package = preview_goal_package(
         repo_path=repo_path,
@@ -595,6 +612,7 @@ def create_goal_package(
         expansion_request=expansion_request,
         goal_id=goal_id,
         parent_goal_id=parent_goal_id,
+        source_comparison_id=source_comparison_id,
     )
     return save_goal_package(package, source_report)
 

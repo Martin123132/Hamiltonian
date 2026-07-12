@@ -37,6 +37,11 @@ button starts the counterpart on the exact same task, then Hamiltonian shows
 both final answers with standardized receipt fingerprints. The saved comparison
 contains receipt metadata, not duplicated answer text.
 
+Comparison history can reopen the original answers after verifying their packet
+boundary and receipt fingerprints. The operator can select Codex, Hermes, or
+Neither, record a short reason, export a sanitized comparison receipt, and
+create a Codex goal directly from the chosen result without another model run.
+
 ![Hamiltonian agent comparison](docs/images/agent-comparison-desktop.jpg)
 
 ### 3. Hand production work to the correct Codex project
@@ -84,8 +89,13 @@ windows.
   </tr>
 </table>
 
-## Version 0.5.0
+## Version 0.5.1
 
+- Mission Home comparison history with verified answer rehydration.
+- Explicit operator decisions: Codex, Hermes, or Neither, with an optional sanitized reason.
+- One-click Codex goal creation from the selected result with comparison and packet lineage.
+- Sanitized comparison receipt export containing fingerprints and the decision, never answer text or workspace paths.
+- Safe degraded reopen behavior when an original packet, answer, or matching receipt is unavailable.
 - Standardized result receipts for every terminal supervised run.
 - Explicit Codex/Hermes second-opinion preview with no launch on dialog open.
 - Side-by-side final answers, duration, result length, and digest fingerprints.
@@ -190,9 +200,9 @@ The build also writes:
 D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.0.zip
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.0.release.json
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.0.sha256
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.1.zip
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.1.release.json
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.1.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
@@ -289,6 +299,7 @@ The cockpit now persists local task packets under:
   history.json
 .hamiltonian/tasks/index.json
 .hamiltonian/comparisons/<comparison-id>/comparison.json
+.hamiltonian/comparisons/<comparison-id>/comparison-export.md
 ```
 
 Each packet includes an explicit lane assignment and gate-run summary. The lane
@@ -328,6 +339,10 @@ status, timing, task digest, result digest, and result length. The receipt never
 contains the final answer. A Codex/Hermes comparison requires successful
 receipts for two different packets with the same task digest. Opening the
 preview launches nothing; the second run requires a separate explicit action.
+Saved comparisons store only receipt metadata and the operator decision. When a
+comparison is reopened, Hamiltonian reads each original answer only from its
+packet runner directory and verifies its SHA-256 digest before displaying it.
+Choosing a result and creating a goal does not call either agent again.
 
 If Codex or Hermes is not callable, its plan remains visible but launch stays
 disabled with the probe failure shown in the cockpit. OpenClaw and the direct
@@ -391,7 +406,8 @@ node scripts\cockpit_browser_smoke.mjs
 It drives the one-button Home flow through successful completion and
 cancellation, checks that only four primary navigation choices are visible, and
 verifies unavailable guidance, Auto/Codex/Hermes selection, comparison consent,
-side-by-side receipts, optional recorder evidence, and a Hermes one-shot packet
+side-by-side receipts, comparison history, operator decisions, sanitized export,
+chosen-result goal lineage, optional recorder evidence, and a Hermes one-shot packet
 through Mission Home in a real local Edge session. The smoke journey supplies deterministic local fakes for
 the Codex and Hermes commands, so it uses no model credits or credentials. QA
 packets are removed after the run. The

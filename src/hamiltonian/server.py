@@ -10,7 +10,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .core import ensure_repo, is_git_repo
-from .comparisons import create_result_comparison, list_result_comparisons
+from .comparisons import (
+    create_result_comparison,
+    export_comparison_receipt,
+    hydrate_result_comparison,
+    list_result_comparisons,
+    save_comparison_decision,
+)
 from .goals import (
     create_corrective_goal,
     create_goal_package,
@@ -104,6 +110,19 @@ class CockpitHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
+        if parsed.path.startswith("/api/comparisons/"):
+            query = parse_qs(parsed.query)
+            comparison_id = unquote(parsed.path.removeprefix("/api/comparisons/")).strip("/")
+            try:
+                repo = self._requested_repo(query.get("repo", [str(self.repo)])[0])
+                self._write_json(hydrate_result_comparison(repo, comparison_id))
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path.startswith("/api/packets/") and parsed.path.endswith("/run"):
             query = parse_qs(parsed.query)
             packet_id = unquote(
@@ -137,6 +156,43 @@ class CockpitHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/comparisons/") and parsed.path.endswith("/decision"):
+            comparison_id = unquote(
+                parsed.path.removeprefix("/api/comparisons/").removesuffix("/decision")
+            ).strip("/")
+            try:
+                payload = self._read_json()
+                repo = self._requested_repo(str(payload.get("repo") or str(self.repo)))
+                comparison = save_comparison_decision(
+                    repo,
+                    comparison_id,
+                    str(payload.get("selected_lane_id") or ""),
+                    str(payload.get("reason") or ""),
+                )
+                self._write_json({"comparison": comparison})
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path.startswith("/api/comparisons/") and parsed.path.endswith("/export"):
+            comparison_id = unquote(
+                parsed.path.removeprefix("/api/comparisons/").removesuffix("/export")
+            ).strip("/")
+            try:
+                payload = self._read_json()
+                repo = self._requested_repo(str(payload.get("repo") or str(self.repo)))
+                export = export_comparison_receipt(repo, comparison_id)
+                self._write_json({"export": export}, status=HTTPStatus.CREATED)
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/comparisons":
             try:
                 payload = self._read_json()
@@ -211,6 +267,7 @@ class CockpitHandler(SimpleHTTPRequestHandler):
                     expansion_request=str(payload.get("expansion_request") or "") or None,
                     goal_id=str(payload.get("goal_id") or "") or None,
                     parent_goal_id=str(payload.get("parent_goal_id") or "") or None,
+                    source_comparison_id=str(payload.get("source_comparison_id") or "") or None,
                 )
                 self._write_json({"goal": packet_to_dict(package)})
             except ValueError as exc:
@@ -229,6 +286,7 @@ class CockpitHandler(SimpleHTTPRequestHandler):
                     expansion_request=str(payload.get("expansion_request") or "") or None,
                     goal_id=str(payload.get("goal_id") or "") or None,
                     parent_goal_id=str(payload.get("parent_goal_id") or "") or None,
+                    source_comparison_id=str(payload.get("source_comparison_id") or "") or None,
                 )
                 self._write_json({"goal": packet_to_dict(package)}, status=HTTPStatus.CREATED)
             except ValueError as exc:
