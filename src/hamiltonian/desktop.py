@@ -16,7 +16,7 @@ from typing import Any
 
 from . import __version__
 from .core import ensure_repo, write_text
-from .goals import ensure_local_state_excluded
+from .goals import ensure_local_state_excluded, goal_workspace_summary
 from .server import create_cockpit_server
 
 
@@ -86,7 +86,7 @@ def recent_workspaces_path(data_dir: Path) -> Path:
     return data_dir / "recent-workspaces.json"
 
 
-def load_recent_workspaces(data_dir: Path) -> list[dict[str, str]]:
+def load_recent_workspaces(data_dir: Path) -> list[dict[str, Any]]:
     path = recent_workspaces_path(data_dir)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -97,7 +97,7 @@ def load_recent_workspaces(data_dir: Path) -> list[dict[str, str]]:
     entries = payload.get("workspaces")
     if not isinstance(entries, list):
         return []
-    recent: list[dict[str, str]] = []
+    recent: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict):
@@ -115,6 +115,7 @@ def load_recent_workspaces(data_dir: Path) -> list[dict[str, str]]:
                 "path": str(candidate),
                 "name": candidate.name or str(candidate),
                 "last_opened": str(entry.get("last_opened") or ""),
+                "goal_summary": goal_workspace_summary(candidate),
             }
         )
         if len(recent) >= MAX_RECENT_WORKSPACES:
@@ -122,7 +123,7 @@ def load_recent_workspaces(data_dir: Path) -> list[dict[str, str]]:
     return recent
 
 
-def remember_workspace(data_dir: Path, repo: Path) -> list[dict[str, str]]:
+def remember_workspace(data_dir: Path, repo: Path) -> list[dict[str, Any]]:
     resolved = ensure_repo(repo)
     key = os.path.normcase(str(resolved))
     existing = [
@@ -136,13 +137,20 @@ def remember_workspace(data_dir: Path, repo: Path) -> list[dict[str, str]]:
             "name": resolved.name or str(resolved),
             "last_opened": _utc_now(),
         },
-        *existing,
+        *[
+            {
+                "path": item["path"],
+                "name": item["name"],
+                "last_opened": item["last_opened"],
+            }
+            for item in existing
+        ],
     ][:MAX_RECENT_WORKSPACES]
     write_text(
         recent_workspaces_path(data_dir),
         json.dumps({"schema": RECENTS_SCHEMA, "workspaces": workspaces}, indent=2) + "\n",
     )
-    return workspaces
+    return load_recent_workspaces(data_dir)
 
 
 def desktop_launcher_html(data_dir: Path) -> str:
