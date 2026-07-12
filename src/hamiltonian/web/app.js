@@ -2501,16 +2501,16 @@ function simpleRouteForLane(laneId, data = state.data) {
 
 function resolveSimpleLane(data = state.data) {
   const selected = simpleLaneSelection();
-  if (selected === "codex" || selected === "hermes") return selected;
+  if (["codex", "hermes", "openclaw"].includes(selected)) return selected;
   const adapters = simpleAdapterStatuses(data);
   const routed = simpleRouteOptions(data)
-    .filter((route) => route.lane_id === "codex" || route.lane_id === "hermes")
+    .filter((route) => ["codex", "hermes", "openclaw"].includes(route.lane_id))
     .find((route) => adapters.get(route.lane_id)?.available && route.capability_status !== "incompatible");
   if (routed) return routed.lane_id;
-  const available = ["codex", "hermes"].find((laneId) => adapters.get(laneId)?.available);
+  const available = ["codex", "hermes", "openclaw"].find((laneId) => adapters.get(laneId)?.available);
   if (available) return available;
   const recommended = simpleRouteOptions(data).find(
-    (route) => route.lane_id === "codex" || route.lane_id === "hermes",
+    (route) => ["codex", "hermes", "openclaw"].includes(route.lane_id),
   );
   return recommended?.lane_id || "codex";
 }
@@ -2518,7 +2518,7 @@ function resolveSimpleLane(data = state.data) {
 function simpleAdapterForLane(laneId, data = state.data) {
   return simpleAdapterStatuses(data).get(laneId) || {
     id: laneId,
-    name: laneId === "hermes" ? "Hermes Agent" : "Codex",
+    name: laneId === "hermes" ? "Hermes Agent" : laneId === "openclaw" ? "OpenClaw" : "Codex",
     available: false,
     detail: "Adapter status is unavailable.",
     safety: "Local supervised process; remote command execution remains off.",
@@ -2584,7 +2584,7 @@ function renderSimpleLanePicker(data = state.data) {
   const routed = routes.find((route) => route.lane_id === resolvedLane);
   const capabilityBlocked = routed?.capability_status === "incompatible";
 
-  ["codex", "hermes"].forEach((laneId) => {
+  ["codex", "hermes", "openclaw"].forEach((laneId) => {
     const current = simpleAdapterForLane(laneId, data);
     const input = $(`input[name='simple-agent-lane'][value='${laneId}']`);
     const label = input?.closest("label");

@@ -9,7 +9,7 @@ from .capabilities import capability_manifest_for_lane
 from .core import ensure_repo, is_git_repo, run_capture
 from .integrations import IntegrationStatus, detect_integrations
 from .packets import build_lane_contracts, build_route_recommendations, list_task_packets
-from .runners import probe_codex_command, probe_hermes_command
+from .runners import probe_codex_command, probe_hermes_command, probe_openclaw_command
 
 
 @dataclass(frozen=True)
@@ -94,10 +94,10 @@ def build_agents(
         ),
         AgentProfile(
             id="openclaw",
-            name="OpenClaw adapter",
-            role="external agent lane",
-            status="adapter planned",
-            notes="Treat as a replaceable worker, not the platform.",
+            name="OpenClaw",
+            role="tool-less embedded reasoning lane",
+            status="runtime-probed",
+            notes="Forced local one-shot transport; no tools, gateway, delivery, or remote execution.",
         ),
         AgentProfile(
             id="hermes",
@@ -123,6 +123,7 @@ def build_agents(
 def build_runner_adapters(repo: Path, git_available: bool) -> list[RunnerAdapterStatus]:
     codex = probe_codex_command(repo)
     hermes = probe_hermes_command(repo)
+    openclaw = probe_openclaw_command(repo)
     return [
         RunnerAdapterStatus(
             id="codex",
@@ -155,6 +156,22 @@ def build_runner_adapters(repo: Path, git_available: bool) -> list[RunnerAdapter
             local_execution=True,
             remote_execution=False,
             capability_manifest=capability_manifest_for_lane("hermes"),
+        ),
+        RunnerAdapterStatus(
+            id="openclaw",
+            name="OpenClaw",
+            available=bool(git_available and openclaw.available),
+            detail=openclaw.detail if git_available else "A Git worktree is required.",
+            mode="local-openclaw-embedded",
+            safety="Forced embedded transport, all tools denied, no delivery flags, and verified JSON transport metadata.",
+            setup_guidance=(
+                "Ready for tool-less embedded one-shot reasoning."
+                if git_available and openclaw.available
+                else "Install OpenClaw and set HAMILTONIAN_OPENCLAW_MODEL outside Hamiltonian, then reopen this workspace."
+            ),
+            local_execution=True,
+            remote_execution=False,
+            capability_manifest=capability_manifest_for_lane("openclaw"),
         ),
     ]
 
@@ -219,7 +236,7 @@ def build_next_actions(integrations: list[IntegrationStatus]) -> list[str]:
     by_name = _integration_map(integrations)
     actions = [
         "Build the task lifecycle: draft, assign, gate, execute, verify, hand off.",
-        "Keep OpenClaw behind a dry-run boundary; Hermes is the first callable non-Codex adapter.",
+        "Use OpenClaw only through its tool-less embedded boundary; gateway and delivery remain unavailable.",
     ]
     if not by_name.get("RepoMori") or not by_name["RepoMori"].available:
         actions.append("Wire RepoMori as the first memory pack so tasks start with repo context.")

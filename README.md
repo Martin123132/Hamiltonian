@@ -102,7 +102,15 @@ windows.
   </tr>
 </table>
 
-## Version 0.6.0
+## Version 0.7.0
+
+- First callable OpenClaw lane through the official embedded one-shot CLI boundary.
+- Forced `--local` transport with post-run verification that the result came from the embedded runtime.
+- Per-run OpenClaw configuration that binds the gateway to loopback and denies every tool.
+- Task-text-only analysis and handoff work: no repository reads, writes, commands, plugins, MCP tools, channels, or delivery.
+- Explicit OpenClaw model configuration and safe unavailable fallback when its CLI contract cannot be probed.
+- OpenClaw packet, API, receipt, cancellation, browser, and non-embedded rejection coverage.
+- Four-lane Mission Home selector with capability-aware Auto routing and setup guidance.
 
 - Versioned, deterministic capability manifests for Codex, Hermes, Local, and OpenClaw lanes.
 - Task requirement classification with `strong`, `compatible`, or `incompatible` adapter fit.
@@ -220,9 +228,9 @@ The build also writes:
 D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.6.0.zip
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.6.0.release.json
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.6.0.sha256
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.7.0.zip
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.7.0.release.json
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.7.0.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
@@ -360,6 +368,26 @@ Hermes safe mode and checkpoints are application controls, not an OS sandbox.
 Hermes may still use the model provider already configured by the operator.
 [Hermes CLI reference](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/cli-commands.md)
 
+The first callable OpenClaw boundary is narrower: Hamiltonian passes task text
+to one embedded, tool-less response and accepts the result only when OpenClaw's
+JSON metadata confirms the `embedded` transport. Set the provider/model id
+outside Hamiltonian before starting the app:
+
+```powershell
+$env:HAMILTONIAN_OPENCLAW_MODEL = "provider/model"
+```
+
+`HAMILTONIAN_OPENCLAW_COMMAND` can optionally point at a compatible local CLI.
+Hamiltonian creates a per-run config that forces `--local`, binds any gateway
+configuration to loopback, denies every tool, and omits channel, delivery, SSH,
+Docker, plugin, and MCP execution. OpenClaw's workspace is not treated as a
+security sandbox, so this first lane cannot read or modify the repository.
+[OpenClaw agent CLI](https://docs.openclaw.ai/cli/agent),
+[workspace boundary](https://docs.openclaw.ai/agent-workspace), and
+[tool policy](https://docs.openclaw.ai/gateway/config-tools).
+
+![Hamiltonian OpenClaw embedded lane](docs/images/openclaw-embedded-desktop.jpg)
+
 Every terminal supervised run writes `result-receipt.json` with adapter, lane,
 status, timing, task digest, result digest, and result length. The receipt never
 contains the final answer. A Codex/Hermes comparison requires successful
@@ -370,9 +398,9 @@ comparison is reopened, Hamiltonian reads each original answer only from its
 packet runner directory and verifies its SHA-256 digest before displaying it.
 Choosing a result and creating a goal does not call either agent again.
 
-If Codex or Hermes is not callable, its plan remains visible but launch stays
-disabled with the probe failure shown in the cockpit. OpenClaw and the direct
-local lane still stop at the dry-run adapter contract. Runner-plan artifacts
+If Codex, Hermes, or OpenClaw is not callable, its plan remains visible but
+launch stays disabled with the probe failure shown in the cockpit. The direct
+local lane still stops at the dry-run adapter contract. Runner-plan artifacts
 contain a task digest and workspace name, not task text or the workspace path.
 Blocked packets do not write a runner artifact.
 Handoff-stage packets add a compact operator brief with lane, route, gate,
@@ -386,7 +414,7 @@ The packet stages are:
 
 - `draft`: save the operator task and selected agent lane.
 - `gate`: check memory through the RepoMori adapter boundary, then run local intent and cost gates.
-- `execute`: prepare an explicit approval boundary and, for a ready Codex or Hermes lane, optionally launch one bounded local CLI run.
+- `execute`: prepare an explicit approval boundary and, for a ready Codex, Hermes, or OpenClaw lane, optionally launch one bounded local CLI run.
 - `handoff`: prepare a local operator handoff brief after gates and any launched run are complete.
 - `record`: run the same gates and attach a local AgentLedger evidence placeholder.
 
@@ -411,11 +439,11 @@ Packet detail can export a sanitized handoff markdown file to:
 The export omits repo paths, packet storage paths, artifact paths, file
 contents, credentials, and remote URLs.
 
-No remote command executor is used in this slice. Codex and Hermes launches are
-locally supervised CLI processes; model access remains the responsibility of
-the operator's existing CLI configuration. Missing Hermes, RepoMori, Jester,
-Tokometer, and AgentLedger integrations degrade to explicit local fallback
-states.
+No remote command executor is used in this slice. Codex, Hermes, and OpenClaw
+launches are locally supervised CLI processes; model access remains the
+responsibility of the operator's existing CLI configuration. Missing OpenClaw,
+Hermes, RepoMori, Jester, Tokometer, and AgentLedger integrations degrade to
+explicit local fallback states.
 
 The RepoMori adapter is privacy-preserving in this slice: it writes sanitized
 metadata only, with no file contents, private path names, credentials, URLs, or
@@ -431,11 +459,11 @@ node scripts\cockpit_browser_smoke.mjs
 
 It drives the one-button Home flow through successful completion and
 cancellation, checks that only four primary navigation choices are visible, and
-verifies unavailable guidance, Auto/Codex/Hermes selection, comparison consent,
+verifies unavailable guidance, Auto/Codex/Hermes/OpenClaw selection, comparison consent,
 side-by-side receipts, comparison history, operator decisions, sanitized export,
 chosen-result goal lineage, capability fit and refusal, optional recorder evidence, and a Hermes one-shot packet
-through Mission Home in a real local Edge session. The smoke journey supplies deterministic local fakes for
-the Codex and Hermes commands, so it uses no model credits or credentials. QA
+and tool-less OpenClaw embedded packet through Mission Home in a real local Edge session. The smoke journey supplies deterministic local fakes for
+the Codex, Hermes, and OpenClaw commands, so it uses no model credits or credentials. QA
 packets are removed after the run. The
 sanitized Mission Home, completed check, goal review, corrective lineage,
 launcher, and mobile captures are written under
@@ -467,6 +495,7 @@ The prototype detects these tools if already installed:
 - TokenSquash: measurable prompt/reply compression.
 - Sentinel Manifold: release-gate / behavior-regression proof layer.
 - Hermes Agent: optional local one-shot agent lane using existing provider configuration.
+- OpenClaw: optional tool-less embedded analysis and handoff lane using an operator-configured model.
 
 Missing tools are reported as warnings, not failures. That lets the wrapper work
 today while the full product stack is assembled.
@@ -480,7 +509,7 @@ the agent:
 Run any agent. Trust none. Keep evidence.
 ```
 
-The cockpit keeps OpenClaw behind a dry-run adapter and makes Hermes its first
-callable non-Codex lane. The market is not
+The cockpit now offers Hermes as a bounded agent lane and OpenClaw as an even
+narrower tool-less embedded lane. The market is not
 "which agent is coolest"; the market is who operators trust to route, gate,
 verify, and prove agent work across all of them.

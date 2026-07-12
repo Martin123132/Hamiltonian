@@ -85,3 +85,53 @@ print("Synthetic Hermes Agent run completed locally.", flush=True)
         encoding="utf-8",
     )
     return (sys.executable, str(script))
+
+
+@pytest.fixture
+def fake_openclaw_command(tmp_path: Path) -> tuple[str, ...]:
+    script = tmp_path / "fake_openclaw.py"
+    script.write_text(
+        """from __future__ import annotations
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+if "--version" in sys.argv:
+    print("OpenClaw 9.9.9-test")
+    raise SystemExit(0)
+
+if "agent" in sys.argv and "--help" in sys.argv:
+    print("--agent --session-key --message-file --model --verbose --local --json")
+    raise SystemExit(0)
+
+required = {"agent", "--agent", "--session-key", "--message-file", "--model", "--local", "--json"}
+if not required.issubset(sys.argv):
+    raise SystemExit(2)
+for forbidden in ("--deliver", "--channel", "--reply-to", "--reply-channel", "--reply-account", "--to"):
+    if forbidden in sys.argv:
+        raise SystemExit(3)
+
+config_path = Path(os.environ["OPENCLAW_CONFIG_PATH"])
+config = json.loads(config_path.read_text(encoding="utf-8"))
+if config["gateway"] != {"mode": "local", "bind": "loopback"}:
+    raise SystemExit(4)
+if config["tools"]["deny"] != ["*"] or config["tools"]["elevated"]["enabled"] is not False:
+    raise SystemExit(5)
+if os.environ.get("OPENCLAW_DISABLE_BONJOUR") != "1":
+    raise SystemExit(6)
+
+message_path = Path(sys.argv[sys.argv.index("--message-file") + 1])
+message = message_path.read_text(encoding="utf-8")
+if "WAIT_FOR_CANCEL" in message:
+    time.sleep(30)
+transport = "gateway" if "SIMULATE_NON_EMBEDDED" in message else "embedded"
+print(json.dumps({
+    "payloads": [{"text": "Synthetic OpenClaw embedded run completed locally."}],
+    "meta": {"transport": transport},
+}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    return (sys.executable, str(script))
