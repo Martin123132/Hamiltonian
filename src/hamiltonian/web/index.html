@@ -151,6 +151,7 @@
             <pre id="simple-run-result" class="simple-run-result" hidden></pre>
             <div class="simple-status-actions">
               <button id="simple-open-packet" class="compact-button" type="button">Open details</button>
+              <button id="simple-compare-button" class="compact-button" type="button" hidden data-testid="compare-agents">Compare agents</button>
               <button id="simple-goal-button" class="compact-button primary-action" type="button" hidden data-testid="get-codex-goal">Get Codex goal</button>
             </div>
           </section>
@@ -219,6 +220,47 @@
             <button id="goal-open-codex-button" class="primary-action" type="button">Open in Codex</button>
             <button id="goal-review-button" class="compact-button" type="button" hidden>Review completed goal</button>
           </div>
+        </dialog>
+
+        <dialog id="comparison-dialog" class="comparison-dialog" aria-labelledby="comparison-dialog-title">
+          <header class="comparison-dialog-head">
+            <div>
+              <p class="eyebrow">Optional second opinion</p>
+              <h2 id="comparison-dialog-title">Compare agent results</h2>
+            </div>
+            <button id="comparison-dialog-close" class="icon-button" type="button" aria-label="Close agent comparison">&times;</button>
+          </header>
+
+          <section class="comparison-boundary" aria-label="Comparison execution boundary">
+            <span id="comparison-boundary-label">Preview only</span>
+            <strong id="comparison-boundary-title">No second run has started</strong>
+            <p id="comparison-boundary-body">Review the counterpart below. Starting comparison launches one additional local agent run.</p>
+          </section>
+
+          <div class="comparison-results" data-testid="comparison-results">
+            <section class="comparison-result-column" aria-label="First agent result">
+              <div class="comparison-result-head">
+                <span>First result</span>
+                <strong id="comparison-primary-name">Current agent</strong>
+              </div>
+              <pre id="comparison-primary-result" class="comparison-result-text">Loading result...</pre>
+              <p id="comparison-primary-receipt" class="comparison-receipt">Loading standardized receipt...</p>
+            </section>
+            <section class="comparison-result-column" aria-label="Second agent result">
+              <div class="comparison-result-head">
+                <span>Second result</span>
+                <strong id="comparison-secondary-name">Counterpart</strong>
+              </div>
+              <pre id="comparison-secondary-result" class="comparison-result-text">Not run yet.</pre>
+              <p id="comparison-secondary-receipt" class="comparison-receipt">Receipt will appear after completion.</p>
+            </section>
+          </div>
+
+          <p id="comparison-dialog-status" class="comparison-dialog-status" aria-live="polite">Comparison preview stays local.</p>
+          <footer class="comparison-dialog-actions">
+            <button id="comparison-cancel-button" class="compact-button" type="button">Close</button>
+            <button id="comparison-run-button" class="primary-action" type="button" data-testid="run-comparison">Run comparison</button>
+          </footer>
         </dialog>
 
         <section id="mission-hud" class="mission-hud" aria-label="Current mission objective" data-pages="map learn">

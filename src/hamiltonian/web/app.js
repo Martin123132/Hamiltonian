@@ -24,6 +24,9 @@ const state = {
   simpleRouteSeq: 0,
   simpleRoutes: [],
   simpleLane: "auto",
+  comparisonPollTimer: null,
+  comparisonPollSeq: 0,
+  comparison: null,
   goalPreviewTimer: null,
   goalHistoryTimer: null,
   goalDraft: null,
@@ -2565,6 +2568,7 @@ function renderSimpleRunExperience() {
   const taskInput = $("#simple-task-input");
   const openButton = $("#simple-open-packet");
   const goalButton = $("#simple-goal-button");
+  const compareButton = $("#simple-compare-button");
   const result = $("#simple-run-result");
   const active = simpleRunIsActive();
   const busyBeforeLaunch = ["saving", "checking"].includes(run.status);
@@ -2590,6 +2594,13 @@ function renderSimpleRunExperience() {
   renderSimpleLanePicker();
   if (openButton) openButton.disabled = !run.packetId;
   if (goalButton) goalButton.hidden = !(run.status === "succeeded" && Boolean(run.result));
+  if (compareButton) {
+    compareButton.hidden = !(
+      run.status === "succeeded" &&
+      Boolean(run.result) &&
+      ["codex", "hermes"].includes(run.laneId)
+    );
+  }
 
   const checkState = ["idle", "saving"].includes(run.status)
     ? run.status === "saving" ? "current" : "waiting"
@@ -2801,6 +2812,269 @@ function openGoalBuilder() {
   renderGoalBuilder();
   $("#goal-dialog")?.showModal();
   scheduleGoalPreview(0);
+}
+
+function comparisonIsActive() {
+  return ["saving", "starting", "running", "cancelling"].includes(state.comparison?.status);
+}
+
+function comparisonReceiptLabel(receipt) {
+  if (!receipt?.result_digest) return "Standardized receipt not available.";
+  const duration = Number(receipt.duration_seconds || 0).toFixed(1);
+  return `${duration}s | ${Number(receipt.result_length || 0)} characters | ${receipt.result_digest.slice(0, 12)}...`;
+}
+
+function renderComparisonDialog() {
+  const comparison = state.comparison;
+  if (!comparison) return;
+  const active = comparisonIsActive();
+  const secondaryAdapter = simpleAdapterForLane(comparison.secondaryLaneId);
+  const boundary = $("#comparison-boundary-label")?.parentElement;
+  if (boundary) boundary.dataset.status = comparison.status;
+  setText("#comparison-primary-name", comparison.primaryName || "First agent");
+  setText("#comparison-secondary-name", comparison.secondaryName || secondaryAdapter.name);
+  setText("#comparison-primary-result", comparison.primaryResult || "No final response was returned.");
+  setText(
+    "#comparison-secondary-result",
+    comparison.secondaryResult || (active ? "Second agent is working..." : "Not run yet."),
+  );
+  setText("#comparison-primary-receipt", comparisonReceiptLabel(comparison.primaryReceipt));
+  setText(
+    "#comparison-secondary-receipt",
+    comparison.secondaryReceipt
+      ? comparisonReceiptLabel(comparison.secondaryReceipt)
+      : "Receipt will appear after completion.",
+  );
+
+  const boundaryCopy = {
+    preview: [
+      "Preview only",
+      `Ready to ask ${secondaryAdapter.name}`,
+      "Starting comparison launches one additional local model run. Evidence remains off and remote command execution stays disabled.",
+    ],
+    loading: [
+      "Loading first receipt",
+      "Preparing the comparison preview",
+      "No second packet or model run can start until the original task and standardized receipt are loaded.",
+    ],
+    unavailable: [
+      "Adapter unavailable",
+      `${secondaryAdapter.name} needs setup`,
+      `${secondaryAdapter.detail} ${secondaryAdapter.setup_guidance}`,
+    ],
+    saving: ["Preparing second packet", `Saving the ${secondaryAdapter.name} comparison`, "No second process has started yet."],
+    starting: ["Second run starting", `${secondaryAdapter.name} is entering the supervised boundary`, "This is the one additional model run approved from this dialog."],
+    running: ["Second run active", `${secondaryAdapter.name} is working`, "You can stop the second run without affecting the first result."],
+    cancelling: ["Stopping second run", `Cancelling ${secondaryAdapter.name}`, "The first result remains unchanged."],
+    complete: ["Comparison complete", "Both standardized receipts are ready", "Answer text is shown live; the saved comparison contains receipt metadata only."],
+    failed: ["Second run failed", `${secondaryAdapter.name} did not complete`, comparison.error || "Review the second packet before retrying."],
+    cancelled: ["Second run stopped", `${secondaryAdapter.name} was cancelled`, "The first result remains available. Start comparison again when ready."],
+  }[comparison.status] || ["Comparison", "Review agent results", comparison.error || "Review the local comparison state."];
+  setText("#comparison-boundary-label", boundaryCopy[0]);
+  setText("#comparison-boundary-title", boundaryCopy[1]);
+  setText("#comparison-boundary-body", boundaryCopy[2]);
+  setText(
+    "#comparison-dialog-status",
+    comparison.comparisonId
+      ? `Saved locally as ${comparison.comparisonId}.`
+      : comparison.status === "preview"
+        ? "Preview only. No second run has started."
+        : comparison.error || "Comparison remains local.",
+  );
+
+  const runButton = $("#comparison-run-button");
+  if (runButton) {
+    runButton.textContent = comparison.status === "complete" ? "Comparison saved" : `Run ${secondaryAdapter.name} once`;
+    runButton.disabled =
+      active || comparison.status === "loading" || comparison.status === "complete" || !secondaryAdapter.available;
+  }
+  const cancelButton = $("#comparison-cancel-button");
+  if (cancelButton) cancelButton.textContent = active ? "Stop second run" : "Close";
+  const closeButton = $("#comparison-dialog-close");
+  if (closeButton) closeButton.disabled = active;
+}
+
+async function openComparisonDialog() {
+  const packetId = state.simpleRun.packetId;
+  const primaryLaneId = state.simpleRun.laneId;
+  if (!packetId || !["codex", "hermes"].includes(primaryLaneId)) return;
+  const secondaryLaneId = primaryLaneId === "codex" ? "hermes" : "codex";
+  const secondaryAdapter = simpleAdapterForLane(secondaryLaneId);
+  state.comparison = {
+    status: "loading",
+    primaryPacketId: packetId,
+    primaryLaneId,
+    primaryName: state.simpleRun.laneName || simpleAdapterForLane(primaryLaneId).name,
+    primaryResult: state.simpleRun.result || "",
+    primaryReceipt: null,
+    secondaryPacketId: null,
+    secondaryLaneId,
+    secondaryName: secondaryAdapter.name,
+    secondaryResult: "",
+    secondaryReceipt: null,
+    task: "",
+    comparisonId: null,
+    error: "",
+  };
+  $("#comparison-dialog")?.showModal();
+  renderComparisonDialog();
+  const params = _queryRepoParams();
+  const [packetResponse, runResponse] = await Promise.all([
+    fetch(`/api/packets/${encodeURIComponent(packetId)}?${params.toString()}`),
+    fetch(`/api/packets/${encodeURIComponent(packetId)}/run?${params.toString()}`),
+  ]);
+  const [packetPayload, runPayload] = await Promise.all([packetResponse.json(), runResponse.json()]);
+  if (!packetResponse.ok || packetPayload.error) throw new Error(packetPayload.error || "Could not load the first packet.");
+  if (!runResponse.ok || runPayload.error) throw new Error(runPayload.error || "Could not load the first result receipt.");
+  state.comparison.task = packetPayload.packet.task || "";
+  state.comparison.primaryResult = runPayload.run.last_message || state.comparison.primaryResult;
+  state.comparison.primaryReceipt = runPayload.run.result_receipt || null;
+  state.comparison.status = secondaryAdapter.available ? "preview" : "unavailable";
+  renderComparisonDialog();
+}
+
+function clearComparisonPoll() {
+  window.clearTimeout(state.comparisonPollTimer);
+  state.comparisonPollTimer = null;
+}
+
+async function persistComparison() {
+  const comparison = state.comparison;
+  const response = await fetch("/api/comparisons", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      repo: $("#repo-input").value || state.repo,
+      primary_packet_id: comparison.primaryPacketId,
+      secondary_packet_id: comparison.secondaryPacketId,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not save the comparison receipt.");
+  comparison.comparisonId = payload.comparison.comparison_id;
+  comparison.primaryResult = payload.results.primary || comparison.primaryResult;
+  comparison.secondaryResult = payload.results.secondary || comparison.secondaryResult;
+  comparison.status = "complete";
+  renderComparisonDialog();
+  await load(state.repo);
+}
+
+async function applyComparisonRun(run) {
+  const comparison = state.comparison;
+  if (!comparison) return false;
+  const status = String(run?.status || "failed");
+  if (["starting", "running", "cancelling"].includes(status)) {
+    comparison.status = status;
+    comparison.error = "";
+    renderComparisonDialog();
+    return true;
+  }
+  comparison.secondaryResult = run?.last_message || "";
+  comparison.secondaryReceipt = run?.result_receipt || null;
+  if (status === "succeeded") {
+    await persistComparison();
+    return false;
+  }
+  comparison.status = status === "cancelled" ? "cancelled" : "failed";
+  comparison.error = run?.summary || "The second agent did not complete successfully.";
+  renderComparisonDialog();
+  return false;
+}
+
+async function pollComparisonRun(immediate = false) {
+  clearComparisonPoll();
+  const comparison = state.comparison;
+  if (!comparison?.secondaryPacketId) return;
+  const sequence = state.comparisonPollSeq + 1;
+  state.comparisonPollSeq = sequence;
+  if (!immediate) await new Promise((resolve) => window.setTimeout(resolve, 650));
+  const params = _queryRepoParams();
+  const response = await fetch(
+    `/api/packets/${encodeURIComponent(comparison.secondaryPacketId)}/run?${params.toString()}`,
+  );
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not read the comparison run.");
+  if (sequence !== state.comparisonPollSeq) return;
+  const keepPolling = await applyComparisonRun(payload.run);
+  if (keepPolling) {
+    state.comparisonPollTimer = window.setTimeout(() => {
+      pollComparisonRun(true).catch((error) => {
+        if (!state.comparison) return;
+        state.comparison.status = "failed";
+        state.comparison.error = error.message;
+        renderComparisonDialog();
+      });
+    }, 700);
+  }
+}
+
+async function runComparison() {
+  const comparison = state.comparison;
+  if (!comparison || comparisonIsActive() || comparison.status === "complete") return;
+  const secondaryAdapter = simpleAdapterForLane(comparison.secondaryLaneId);
+  if (!secondaryAdapter.available) {
+    comparison.status = "unavailable";
+    renderComparisonDialog();
+    return;
+  }
+  comparison.status = "saving";
+  comparison.error = "";
+  renderComparisonDialog();
+  const repo = $("#repo-input").value || state.repo;
+  const packetResponse = await fetch("/api/packets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      repo,
+      task: comparison.task,
+      agent_id: comparison.secondaryLaneId,
+      stage: "execute",
+      attach_evidence: false,
+      mode: "orchestrate",
+    }),
+  });
+  const packetPayload = await packetResponse.json();
+  if (!packetResponse.ok || packetPayload.error) throw new Error(packetPayload.error || "Could not prepare the comparison packet.");
+  const packet = packetPayload.packet;
+  comparison.secondaryPacketId = packet.packet_id;
+  if (!packet.runner_plan?.launch_supported) {
+    comparison.status = "unavailable";
+    comparison.error = packet.runner_plan?.adapter_detail || `${secondaryAdapter.name} is unavailable.`;
+    renderComparisonDialog();
+    return;
+  }
+  comparison.status = "starting";
+  renderComparisonDialog();
+  const params = _queryRepoParams();
+  const timeoutSeconds = Number.parseInt($("#simple-timeout-input")?.value || "900", 10);
+  const launchResponse = await fetch(
+    `/api/packets/${encodeURIComponent(packet.packet_id)}/run?${params.toString()}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timeout_seconds: timeoutSeconds }),
+    },
+  );
+  const launchPayload = await launchResponse.json();
+  if (!launchResponse.ok || launchPayload.error) throw new Error(launchPayload.error || "Could not start the comparison run.");
+  const keepPolling = await applyComparisonRun(launchPayload.run);
+  if (keepPolling) await pollComparisonRun();
+}
+
+async function cancelComparisonRun() {
+  const comparison = state.comparison;
+  if (!comparison?.secondaryPacketId || !comparisonIsActive()) return;
+  comparison.status = "cancelling";
+  renderComparisonDialog();
+  const params = _queryRepoParams();
+  const response = await fetch(
+    `/api/packets/${encodeURIComponent(comparison.secondaryPacketId)}/run/cancel?${params.toString()}`,
+    { method: "POST" },
+  );
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not stop the comparison run.");
+  const keepPolling = await applyComparisonRun(payload.run);
+  if (keepPolling) await pollComparisonRun();
 }
 
 function clearSimplePoll() {
@@ -4866,6 +5140,52 @@ function initGoalControls() {
   }
 }
 
+function initComparisonControls() {
+  const compareButton = $("#simple-compare-button");
+  if (compareButton) {
+    compareButton.addEventListener("click", () => {
+      openComparisonDialog().catch((error) => {
+        if (state.comparison) {
+          state.comparison.status = "failed";
+          state.comparison.error = error.message;
+          renderComparisonDialog();
+        }
+      });
+    });
+  }
+
+  const runButton = $("#comparison-run-button");
+  if (runButton) {
+    runButton.addEventListener("click", () => {
+      runComparison().catch((error) => {
+        if (!state.comparison) return;
+        state.comparison.status = "failed";
+        state.comparison.error = error.message;
+        renderComparisonDialog();
+      });
+    });
+  }
+
+  const closeComparison = () => {
+    if (comparisonIsActive()) {
+      cancelComparisonRun().catch((error) => {
+        if (!state.comparison) return;
+        state.comparison.error = error.message;
+        renderComparisonDialog();
+      });
+      return;
+    }
+    clearComparisonPoll();
+    $("#comparison-dialog")?.close();
+  };
+  $("#comparison-cancel-button")?.addEventListener("click", closeComparison);
+  $("#comparison-dialog-close")?.addEventListener("click", closeComparison);
+  $("#comparison-dialog")?.addEventListener("cancel", (event) => {
+    if (!comparisonIsActive()) return;
+    event.preventDefault();
+  });
+}
+
 function initCreatePacketControls() {
   const backHome = $("#create-back-home");
   if (backHome) {
@@ -5218,6 +5538,7 @@ $("#agent-select").addEventListener("change", () => {
 
 initMissionHomeControls();
 initGoalControls();
+initComparisonControls();
 initCreatePacketControls();
 initFlightRecorderControls();
 initHandoffExportControls();

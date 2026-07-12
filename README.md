@@ -3,16 +3,16 @@
 **Run any agent. Trust none. Keep evidence when it matters.**
 
 Hamiltonian is a local-first operator cockpit for agent work. Describe the
-result you want, run a bounded local check, hand the resulting goal to the
-correct Codex project, and bring the completion receipt back for independent
-review.
+result you want, run a bounded local check, optionally compare a second agent,
+hand the resulting goal to the correct Codex project, and bring the completion
+receipt back for independent review.
 
 ![Hamiltonian Mission Home](docs/images/mission-home-desktop.jpg)
 
 The normal path stays deliberately simple:
 
 1. Write the job in plain language.
-2. Press **Run locally**.
+2. Press the lane-aware **Run** action.
 3. Turn a useful result into a Maintenance or Expansion goal.
 4. Let Hamiltonian detect the return receipt and review the completed work.
 
@@ -25,12 +25,21 @@ off, and evidence remains optional unless the operator selects it.
 ### 1. Run a bounded local check
 
 Hamiltonian saves a task packet, evaluates its local safety, memory, and cost
-gates, then launches the selected local Codex lane only after the operator
-presses **Run locally**.
+gates, then launches the selected callable agent lane only after the operator
+presses the main Run action.
 
 ![Completed Hamiltonian health check](docs/images/health-check-desktop.jpg)
 
-### 2. Hand production work to the correct Codex project
+### 2. Compare a second agent when the decision matters
+
+**Compare agents** opens a preview without launching anything. One explicit
+button starts the counterpart on the exact same task, then Hamiltonian shows
+both final answers with standardized receipt fingerprints. The saved comparison
+contains receipt metadata, not duplicated answer text.
+
+![Hamiltonian agent comparison](docs/images/agent-comparison-desktop.jpg)
+
+### 3. Hand production work to the correct Codex project
 
 **Get Codex goal** creates one bounded handoff with a workspace lock, baseline
 commit, acceptance criteria, verification requirements, and a local return
@@ -45,7 +54,7 @@ Hamiltonian copies the goal and can open the repository in Codex, but the user
 still chooses the destination project task. It never injects work into another
 task automatically.
 
-### 3. Review the return receipt
+### 4. Review the return receipt
 
 When Codex writes `return.json`, Goal history notices it automatically and
 shows **Review now**. Hamiltonian then runs a local, read-only check against the
@@ -53,7 +62,7 @@ saved baseline and acceptance criteria.
 
 ![Goal ready for review](docs/images/goal-ready-desktop.jpg)
 
-### 4. Correct incomplete work without losing the thread
+### 5. Correct incomplete work without losing the thread
 
 An incomplete review produces a focused corrective goal. Parent, lineage root,
 correction number, receipt, review, and grade movement remain visible in one
@@ -75,8 +84,13 @@ windows.
   </tr>
 </table>
 
-## Version 0.4.1
+## Version 0.5.0
 
+- Standardized result receipts for every terminal supervised run.
+- Explicit Codex/Hermes second-opinion preview with no launch on dialog open.
+- Side-by-side final answers, duration, result length, and digest fingerprints.
+- Repo-local comparison records that omit answer text and workspace paths.
+- Comparison cancellation, unavailable-adapter guidance, and responsive desktop/mobile layouts.
 - Mission Home `Auto / Codex / Hermes` worker selector with live local readiness.
 - Task-aware Auto routing that chooses only callable Codex or Hermes adapters.
 - Plain setup guidance when an adapter is unavailable, without installing tools or handling credentials.
@@ -176,9 +190,9 @@ The build also writes:
 D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.1.zip
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.1.release.json
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.1.sha256
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.0.zip
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.0.release.json
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.0.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
@@ -269,10 +283,12 @@ The cockpit now persists local task packets under:
       runner-output.log
       last-message.txt
       runner-report.json
+      result-receipt.json
   evidence/
     agentledger-placeholder.json
   history.json
 .hamiltonian/tasks/index.json
+.hamiltonian/comparisons/<comparison-id>/comparison.json
 ```
 
 Each packet includes an explicit lane assignment and gate-run summary. The lane
@@ -306,6 +322,12 @@ delivery service, or enable SSH, Docker, or another remote command backend.
 Hermes safe mode and checkpoints are application controls, not an OS sandbox.
 Hermes may still use the model provider already configured by the operator.
 [Hermes CLI reference](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/cli-commands.md)
+
+Every terminal supervised run writes `result-receipt.json` with adapter, lane,
+status, timing, task digest, result digest, and result length. The receipt never
+contains the final answer. A Codex/Hermes comparison requires successful
+receipts for two different packets with the same task digest. Opening the
+preview launches nothing; the second run requires a separate explicit action.
 
 If Codex or Hermes is not callable, its plan remains visible but launch stays
 disabled with the probe failure shown in the cockpit. OpenClaw and the direct
@@ -368,9 +390,9 @@ node scripts\cockpit_browser_smoke.mjs
 
 It drives the one-button Home flow through successful completion and
 cancellation, checks that only four primary navigation choices are visible, and
-verifies unavailable guidance, Auto/Codex/Hermes selection, optional recorder
-evidence, and a Hermes one-shot packet through Mission Home in a real local
-Edge session. The smoke journey supplies deterministic local fakes for
+verifies unavailable guidance, Auto/Codex/Hermes selection, comparison consent,
+side-by-side receipts, optional recorder evidence, and a Hermes one-shot packet
+through Mission Home in a real local Edge session. The smoke journey supplies deterministic local fakes for
 the Codex and Hermes commands, so it uses no model credits or credentials. QA
 packets are removed after the run. The
 sanitized Mission Home, completed check, goal review, corrective lineage,

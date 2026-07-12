@@ -10,6 +10,7 @@ from hamiltonian.integrations import _cached_detect_integrations, detect_integra
 from hamiltonian.runners import (
     RUNNER_CONTRACT_SCHEMA,
     RUNNER_LIFECYCLE,
+    RUNNER_RESULT_SCHEMA,
     CodexLocalRunnerAdapter,
     HermesLocalRunnerAdapter,
     LocalRunManager,
@@ -329,6 +330,9 @@ def test_local_run_manager_captures_hermes_one_shot_response(
     assert completed["local_execution"] is True
     assert completed["remote_execution"] is False
     assert Path(completed["output_path"]).name == "runner-output.log"
+    assert completed["result_receipt"]["schema"] == RUNNER_RESULT_SCHEMA
+    assert completed["result_receipt"]["lane_id"] == "hermes"
+    assert completed["result_receipt"]["result_included"] is False
     assert any(event["type"] == "runner.succeeded" for event in completed["events"])
 
 
@@ -367,6 +371,16 @@ def test_local_run_manager_streams_sanitized_events_and_report(
     assert "command_execution" in event_text
     assert any(event["type"] == "runner.succeeded" for event in completed["events"])
     assert Path(completed["report_path"]).exists()
+    receipt = completed["result_receipt"]
+    assert receipt["schema"] == RUNNER_RESULT_SCHEMA
+    assert receipt["lane_id"] == "codex"
+    assert receipt["status"] == "succeeded"
+    assert receipt["result_available"] is True
+    assert receipt["result_length"] == len("Synthetic Codex run completed locally.")
+    assert receipt["result_included"] is False
+    assert receipt["remote_execution"] is False
+    stored_receipt = Path(completed["result_receipt_path"]).read_text(encoding="utf-8")
+    assert "Synthetic Codex run completed locally." not in stored_receipt
     assert read_latest_runner_state(packet_dir)["status"] == "succeeded"
 
 

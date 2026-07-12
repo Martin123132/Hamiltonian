@@ -1001,6 +1001,13 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="simple-open-manual"' in html
     assert 'id="simple-open-packet"' in html
     assert 'id="simple-goal-button"' in html
+    assert 'id="simple-compare-button"' in html
+    assert 'data-testid="compare-agents"' in html
+    assert 'id="comparison-dialog"' in html
+    assert 'id="comparison-primary-result"' in html
+    assert 'id="comparison-secondary-result"' in html
+    assert 'id="comparison-run-button"' in html
+    assert 'data-testid="run-comparison"' in html
     assert 'data-testid="get-codex-goal"' in html
     assert 'id="goal-dialog"' in html
     assert 'id="goal-type-maintenance"' in html
@@ -1207,6 +1214,11 @@ def test_static_ui_targets_packet_api() -> None:
     assert "agent_id: laneId" in app
     assert "simple-run-button" in app
     assert "function openGoalBuilder" in app
+    assert "function openComparisonDialog" in app
+    assert "function runComparison" in app
+    assert "function pollComparisonRun" in app
+    assert "function persistComparison" in app
+    assert 'fetch("/api/comparisons"' in app
     assert "function refreshGoalPreview" in app
     assert "function ensureGoalSaved" in app
     assert "function openGoalInCodex" in app
@@ -1410,6 +1422,9 @@ def test_static_ui_targets_packet_api() -> None:
     assert ".runner-progress-track" in styles
     assert ".runner-event-row" in styles
     assert ".runner-final-message" in styles
+    assert ".comparison-dialog" in styles
+    assert ".comparison-results" in styles
+    assert ".comparison-result-text" in styles
     assert ".detail-panel-section" in styles
     assert ".packet-detail-tabs button" in styles
     assert ".mission-packet-object" in styles
