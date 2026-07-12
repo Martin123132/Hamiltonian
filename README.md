@@ -75,8 +75,12 @@ windows.
   </tr>
 </table>
 
-## Version 0.3.0
+## Version 0.3.1
 
+- Read-only GitHub Actions checks on Python 3.10 and 3.13.
+- Deterministic Windows browser-smoke verification with screenshot artifacts.
+- Reproducible Windows portable ZIP, release manifest, and SHA-256 checksum.
+- Tag packaging with release publication gated by an explicit manual boolean.
 - Native Windows WebView2 desktop shell and D-drive-first storage.
 - One-button local Codex workflow with cancellation and bounded runner state.
 - Maintenance and Expansion goal handoffs.
@@ -164,12 +168,21 @@ The build also writes:
 D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.3.1.zip
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.3.1.release.json
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.3.1.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
 `D:\Codex\Data\Hamiltonian`. The build manifest and checksum provide the
 versioned verification boundary needed for a future manual updater. No remote
 update check or background update service is enabled.
+
+Every pull request now runs the complete test matrix, the real Edge browser
+journey, and a Windows desktop package build. Tag pushes build reviewable
+workflow artifacts but do not publish them. The separate **Package Release**
+workflow only attaches the unsigned ZIP to a private GitHub release when it is
+started manually with `publish` explicitly enabled.
 
 The packaged app uses a `data` directory beside the executable unless
 `HAMILTONIAN_HOME` or `--data-dir` is supplied. It does not use `%APPDATA%` for
