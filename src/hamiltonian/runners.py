@@ -15,6 +15,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from .capabilities import capability_manifest_for_lane, evaluate_capability_fit
 from .core import is_git_repo, write_text
 
 
@@ -84,6 +85,12 @@ class RunnerPlan:
     artifact_path: str | None
     summary: str
     next_action: str
+    capability_manifest_schema: str = ""
+    capability_manifest_version: int = 0
+    capability_manifest_digest: str = ""
+    capability_status: str = "unknown"
+    task_requirements: tuple[str, ...] = ()
+    missing_capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -192,7 +199,9 @@ def runner_plan_state(
     mode: str,
     summary: str,
     next_action: str,
+    task: str = "",
 ) -> RunnerPlan:
+    capability_fields = _plan_capability_fields(lane_id, task)
     return RunnerPlan(
         schema=RUNNER_CONTRACT_SCHEMA,
         adapter_id=_adapter_id(lane_id),
@@ -214,7 +223,21 @@ def runner_plan_state(
         artifact_path=None,
         summary=summary,
         next_action=next_action,
+        **capability_fields,
     )
+
+
+def _plan_capability_fields(lane_id: str, task: str) -> dict[str, Any]:
+    manifest = capability_manifest_for_lane(lane_id)
+    fit = evaluate_capability_fit(task, lane_id) if task else None
+    return {
+        "capability_manifest_schema": str(manifest["schema"]),
+        "capability_manifest_version": int(manifest["manifest_version"]),
+        "capability_manifest_digest": str(manifest["manifest_digest"]),
+        "capability_status": str(fit["status"] if fit else "not-evaluated"),
+        "task_requirements": tuple(str(item) for item in (fit["requirements"] if fit else [])),
+        "missing_capabilities": tuple(str(item) for item in (fit["missing_capabilities"] if fit else [])),
+    }
 
 
 def _write_plan_artifact(
@@ -258,6 +281,7 @@ class LocalDryRunRunnerAdapter(RunnerAdapter):
                 mode="local-dry-run",
                 summary="Runner plan refused because one or more gates blocked the packet.",
                 next_action="Clear blocked gates before preparing a launch plan.",
+                task=request.task,
             )
 
         plan = RunnerPlan(
@@ -281,6 +305,7 @@ class LocalDryRunRunnerAdapter(RunnerAdapter):
             artifact_path=None,
             summary="Runner contract prepared a sanitized local launch plan; no process or agent executed.",
             next_action="Review the plan before a future local adapter is allowed to launch.",
+            **_plan_capability_fields(self.lane_id, request.task),
         )
         return _write_plan_artifact(plan, request, packet_dir)
 
@@ -465,6 +490,17 @@ class CodexLocalRunnerAdapter(RunnerAdapter):
                 mode="local-codex",
                 summary="Codex runner plan refused because readiness gates blocked the packet.",
                 next_action="Clear blocked gates before preparing a Codex launch.",
+                task=request.task,
+            )
+        capability_fit = evaluate_capability_fit(request.task, self.lane_id)
+        if capability_fit["status"] == "incompatible":
+            return runner_plan_state(
+                lane_id=self.lane_id,
+                status="capability-blocked",
+                mode="local-codex",
+                summary=capability_fit["summary"],
+                next_action="Rewrite the task for a supported local capability before launch.",
+                task=request.task,
             )
 
         probe = self._probe_for(request.repo)
@@ -502,6 +538,7 @@ class CodexLocalRunnerAdapter(RunnerAdapter):
             artifact_path=None,
             summary=summary,
             next_action=next_action,
+            **_plan_capability_fields(self.lane_id, request.task),
         )
         return _write_plan_artifact(plan, request, packet_dir)
 
@@ -614,6 +651,17 @@ class HermesLocalRunnerAdapter(RunnerAdapter):
                 mode="local-hermes-one-shot",
                 summary="Hermes runner plan refused because readiness gates blocked the packet.",
                 next_action="Clear blocked gates before preparing a Hermes launch.",
+                task=request.task,
+            )
+        capability_fit = evaluate_capability_fit(request.task, self.lane_id)
+        if capability_fit["status"] == "incompatible":
+            return runner_plan_state(
+                lane_id=self.lane_id,
+                status="capability-blocked",
+                mode="local-hermes-one-shot",
+                summary=capability_fit["summary"],
+                next_action="Rewrite the task for a supported local capability before launch.",
+                task=request.task,
             )
 
         probe = self._probe_for(request.repo)
@@ -644,6 +692,7 @@ class HermesLocalRunnerAdapter(RunnerAdapter):
                 if available
                 else "Hermes runner contract is prepared, but the local CLI boundary is unavailable."
             ),
+            **_plan_capability_fields(self.lane_id, request.task),
             next_action=(
                 "Review the timeout and explicitly launch Hermes in safe mode with checkpoints."
                 if available
@@ -768,6 +817,12 @@ def runner_plan_from_dict(data: dict[str, Any]) -> RunnerPlan:
         artifact_path=str(data["artifact_path"]) if data.get("artifact_path") else None,
         summary=str(data.get("summary") or "Runner plan unavailable."),
         next_action=str(data.get("next_action") or "Review runner state."),
+        capability_manifest_schema=str(data.get("capability_manifest_schema") or ""),
+        capability_manifest_version=int(data.get("capability_manifest_version") or 0),
+        capability_manifest_digest=str(data.get("capability_manifest_digest") or ""),
+        capability_status=str(data.get("capability_status") or "unknown"),
+        task_requirements=tuple(str(item) for item in data.get("task_requirements") or []),
+        missing_capabilities=tuple(str(item) for item in data.get("missing_capabilities") or []),
     )
 
 

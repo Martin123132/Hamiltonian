@@ -990,6 +990,12 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'name="simple-agent-lane" value="hermes"' in html
     assert 'id="simple-lane-guidance"' in html
     assert 'data-testid="simple-lane-guidance"' in html
+    assert 'id="simple-capability-fit"' in html
+    assert 'data-testid="simple-capability-fit"' in html
+    assert 'id="simple-capability-requirements"' in html
+    assert 'id="simple-capability-strengths"' in html
+    assert 'id="simple-capability-safety"' in html
+    assert 'id="simple-capability-limitations"' in html
     assert 'id="simple-runtime-agent"' in html
     assert 'id="simple-workspace-name"' in html
     assert 'data-testid="simple-run"' in html
@@ -1218,6 +1224,8 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function pollSimpleRunner" in app
     assert "function renderSimpleRunExperience" in app
     assert "function renderSimpleLanePicker" in app
+    assert "function renderSimpleCapabilityFit" in app
+    assert "function renderCapabilityList" in app
     assert "function resolveSimpleLane" in app
     assert "function refreshSimpleRoutes" in app
     assert "agent_id: laneId" in app
@@ -1448,5 +1456,7 @@ def test_static_ui_targets_packet_api() -> None:
     assert ".home-evidence-option" in styles
     assert ".home-recent-packets" in styles
     assert ".simple-goal-history" in styles
+    assert ".simple-capability-fit" in styles
+    assert ".simple-capability-detail-grid" in styles
     assert ".goal-history-row" in styles
     assert ".goal-history-badge" in styles

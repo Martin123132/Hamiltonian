@@ -5356,6 +5356,103 @@ body[data-active-page="advanced"] .topbar .repo-form {
   border-left-color: var(--advisory);
 }
 
+.simple-lane-guidance[data-capability-status="incompatible"] {
+  border-left-color: var(--danger);
+}
+
+.simple-capability-fit {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 10px;
+}
+
+.simple-capability-summary {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.simple-capability-summary > span,
+.simple-capability-fit summary {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.simple-capability-summary > strong {
+  font-size: 12px;
+}
+
+.simple-capability-fit[data-status="strong"] .simple-capability-summary > strong {
+  color: var(--accent-soft);
+}
+
+.simple-capability-fit[data-status="incompatible"] .simple-capability-summary > strong {
+  color: var(--danger);
+}
+
+.simple-capability-requirements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.simple-capability-requirements span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 4px 7px;
+  text-transform: capitalize;
+}
+
+.simple-capability-requirements span[data-missing="true"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.simple-capability-fit details {
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+}
+
+.simple-capability-fit summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.simple-capability-detail-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 12px;
+}
+
+.simple-capability-detail-grid section {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.simple-capability-detail-grid section > strong {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.simple-capability-detail-grid ul {
+  color: var(--muted);
+  display: grid;
+  font-size: 11px;
+  gap: 5px;
+  line-height: 1.4;
+  margin: 0;
+  padding-left: 16px;
+}
+
 .simple-run-actions {
   align-items: center;
   display: flex;
@@ -6181,6 +6278,10 @@ body[data-active-page="advanced"] .topbar .repo-form {
 }
 
 @media (max-width: 620px) {
+  .simple-capability-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
   .goal-dialog {
     max-height: calc(100vh - 20px);
     max-width: calc(100vw - 20px);
