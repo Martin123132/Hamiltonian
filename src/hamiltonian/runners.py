@@ -7,6 +7,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -31,6 +32,15 @@ MIN_RUN_TIMEOUT_SECONDS = 5
 MAX_RUN_TIMEOUT_SECONDS = 3600
 MAX_RUN_LOG_BYTES = 2_000_000
 MAX_RUN_EVENTS = 500
+OPENCLAW_TRANSPORT_POLICY_SCHEMA = "hamiltonian.openclaw-transport-policy.v1"
+OPENCLAW_REQUIRED_AGENT_FLAGS = {
+    "--agent",
+    "--json",
+    "--local",
+    "--message-file",
+    "--model",
+    "--session-key",
+}
 
 
 def _utc_now() -> str:
@@ -38,7 +48,7 @@ def _utc_now() -> str:
 
 
 def _adapter_id(lane_id: str) -> str:
-    if lane_id in {"codex", "hermes"}:
+    if lane_id in {"codex", "hermes", "openclaw"}:
         return f"{lane_id}-local"
     return f"{lane_id}-local-contract"
 
@@ -188,6 +198,12 @@ class RunnerAdapter(ABC):
 
     def build_command(self, request: RunnerRequest, run_dir: Path) -> list[str]:
         raise ValueError(f"{self.adapter_id} does not support launch")
+
+    def build_environment(self, request: RunnerRequest, run_dir: Path) -> dict[str, str]:
+        return {}
+
+    def validate_output(self, output_path: Path) -> str | None:
+        return None
 
     def persist_final_message(self, output_path: Path, final_message_path: Path) -> None:
         """Persist a final response when an adapter emits it through stdout."""
@@ -464,6 +480,82 @@ def probe_hermes_command(
     output = (proc.stdout or proc.stderr or "").strip().splitlines()
     detail = output[0][:180] if output else f"Hermes Agent CLI exited {proc.returncode}."
     return AdapterProbe(proc.returncode == 0, prefix, detail)
+
+
+def _configured_openclaw_command() -> tuple[str, ...]:
+    configured = os.environ.get("HAMILTONIAN_OPENCLAW_COMMAND", "").strip()
+    if configured:
+        if configured.startswith("["):
+            try:
+                value = json.loads(configured)
+            except json.JSONDecodeError as exc:
+                raise ValueError("HAMILTONIAN_OPENCLAW_COMMAND must be a command or JSON array") from exc
+            if not isinstance(value, list) or not value or not all(
+                isinstance(item, str) and item for item in value
+            ):
+                raise ValueError("HAMILTONIAN_OPENCLAW_COMMAND JSON must be a non-empty string array")
+            return tuple(value)
+        if Path(configured).exists():
+            return (configured,)
+        return tuple(shlex.split(configured, posix=os.name != "nt"))
+    executable = shutil.which("openclaw")
+    return (executable,) if executable else ()
+
+
+def _configured_openclaw_model() -> str:
+    model = os.environ.get("HAMILTONIAN_OPENCLAW_MODEL", "").strip()
+    if not model:
+        raise ValueError("Set HAMILTONIAN_OPENCLAW_MODEL to an existing OpenClaw provider/model id.")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,180}", model):
+        raise ValueError("HAMILTONIAN_OPENCLAW_MODEL contains unsupported characters.")
+    return model
+
+
+def probe_openclaw_command(
+    repo: Path,
+    command_prefix: tuple[str, ...] | None = None,
+) -> AdapterProbe:
+    try:
+        prefix = command_prefix if command_prefix is not None else _configured_openclaw_command()
+        _configured_openclaw_model()
+    except ValueError as exc:
+        return AdapterProbe(False, (), str(exc))
+    if not prefix:
+        return AdapterProbe(False, (), "OpenClaw CLI is not installed or not on PATH.")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        version = subprocess.run(
+            [*prefix, "--version"],
+            cwd=str(repo.resolve()),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            check=False,
+            creationflags=creationflags,
+        )
+        help_result = subprocess.run(
+            [*prefix, "agent", "--help"],
+            cwd=str(repo.resolve()),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            check=False,
+            creationflags=creationflags,
+        )
+    except Exception as exc:
+        return AdapterProbe(False, prefix, f"OpenClaw CLI probe failed: {type(exc).__name__}.")
+    version_lines = (version.stdout or version.stderr or "").strip().splitlines()
+    detail = version_lines[0][:180] if version_lines else f"OpenClaw CLI exited {version.returncode}."
+    help_text = f"{help_result.stdout}\n{help_result.stderr}"
+    missing = sorted(flag for flag in OPENCLAW_REQUIRED_AGENT_FLAGS if flag not in help_text)
+    if version.returncode != 0:
+        return AdapterProbe(False, prefix, detail)
+    if help_result.returncode != 0 or missing:
+        suffix = f" Missing required agent flags: {', '.join(missing)}." if missing else ""
+        return AdapterProbe(False, prefix, f"OpenClaw agent help probe failed.{suffix}")
+    return AdapterProbe(True, prefix, detail)
 
 
 class CodexLocalRunnerAdapter(RunnerAdapter):
@@ -786,12 +878,254 @@ class HermesLocalRunnerAdapter(RunnerAdapter):
             write_text(final_message_path, message)
 
 
+def _openclaw_output_payload(output_path: Path) -> dict[str, Any] | None:
+    if not output_path.is_file():
+        return None
+    text = output_path.read_text(encoding="utf-8", errors="replace")
+    decoder = json.JSONDecoder()
+    candidates: list[dict[str, Any]] = []
+    for index, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and ("payloads" in value or "meta" in value):
+            candidates.append(value)
+    return candidates[-1] if candidates else None
+
+
+class OpenClawLocalRunnerAdapter(RunnerAdapter):
+    """Runs a tool-less embedded OpenClaw turn with delivery and gateways disabled."""
+
+    lane_id = "openclaw"
+    adapter_id = "openclaw-local"
+
+    def __init__(self, command_prefix: tuple[str, ...] | None = None) -> None:
+        self.command_prefix = command_prefix
+        self._probe: AdapterProbe | None = None
+
+    def _probe_for(self, repo: Path) -> AdapterProbe:
+        self._probe = probe_openclaw_command(repo, self.command_prefix)
+        return self._probe
+
+    def prepare(self, request: RunnerRequest, packet_dir: Path) -> RunnerPlan:
+        if request.lane_id != self.lane_id:
+            raise ValueError("runner request lane does not match adapter lane")
+        if request.blocked_gate_ids:
+            return runner_plan_state(
+                lane_id=self.lane_id,
+                status="blocked",
+                mode="local-openclaw-embedded",
+                summary="OpenClaw runner plan refused because readiness gates blocked the packet.",
+                next_action="Clear blocked gates before preparing an OpenClaw launch.",
+                task=request.task,
+            )
+        capability_fit = evaluate_capability_fit(request.task, self.lane_id)
+        if capability_fit["status"] == "incompatible":
+            return runner_plan_state(
+                lane_id=self.lane_id,
+                status="capability-blocked",
+                mode="local-openclaw-embedded",
+                summary=capability_fit["summary"],
+                next_action="Use OpenClaw only for a supported tool-less analysis or handoff task.",
+                task=request.task,
+            )
+        probe = self._probe_for(request.repo)
+        git_ready = is_git_repo(request.repo)
+        available = probe.available and git_ready
+        detail = probe.detail if git_ready else "OpenClaw launch requires a Git worktree."
+        plan = RunnerPlan(
+            schema=RUNNER_CONTRACT_SCHEMA,
+            adapter_id=self.adapter_id,
+            lane_id=self.lane_id,
+            status="prepared",
+            mode="local-openclaw-embedded",
+            lifecycle=RUNNER_LIFECYCLE,
+            approval_required=True,
+            adapter_available=available,
+            adapter_detail=detail,
+            launch_supported=available,
+            sandbox_policy="tool-less-embedded-local",
+            local_only=True,
+            local_execution=False,
+            remote_execution=False,
+            workspace_name=request.repo.resolve().name,
+            task_digest=sha256(request.task.encode("utf-8")).hexdigest(),
+            task_length=len(request.task),
+            artifact_path=None,
+            summary=(
+                "OpenClaw is ready for an explicit tool-less embedded one-shot run."
+                if available
+                else "OpenClaw is represented, but its verified embedded boundary is unavailable."
+            ),
+            next_action=(
+                "Review the tool-less boundary and explicitly launch the embedded OpenClaw turn."
+                if available
+                else "Install a compatible OpenClaw CLI and set HAMILTONIAN_OPENCLAW_MODEL outside Hamiltonian."
+            ),
+            **_plan_capability_fields(self.lane_id, request.task),
+        )
+        return _write_plan_artifact(plan, request, packet_dir)
+
+    def launch(self, plan: RunnerPlan) -> RunnerHandle:
+        if not plan.launch_supported or not plan.adapter_available:
+            return RunnerHandle(
+                run_id=f"openclaw-unavailable-{uuid4().hex[:8]}",
+                adapter_id=self.adapter_id,
+                status="launch-disabled",
+                process_id=None,
+                local_execution=False,
+                remote_execution=False,
+                summary=plan.adapter_detail,
+            )
+        return RunnerHandle(
+            run_id=f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
+            adapter_id=self.adapter_id,
+            status="starting",
+            process_id=None,
+            local_execution=True,
+            remote_execution=False,
+            summary="OpenClaw embedded one-shot launch was explicitly approved.",
+        )
+
+    def stream(self, handle: RunnerHandle) -> tuple[RunnerEvent, ...]:
+        return (
+            RunnerEvent(
+                run_id=handle.run_id,
+                sequence=1,
+                status=handle.status,
+                message="OpenClaw entered the tool-less embedded transport boundary.",
+                local_only=True,
+            ),
+        )
+
+    def cancel(self, handle: RunnerHandle) -> RunnerHandle:
+        return RunnerHandle(
+            run_id=handle.run_id,
+            adapter_id=handle.adapter_id,
+            status="cancelling",
+            process_id=handle.process_id,
+            local_execution=handle.local_execution,
+            remote_execution=False,
+            summary="Cancellation requested for the embedded OpenClaw process tree.",
+        )
+
+    def finish(self, handle: RunnerHandle) -> RunnerReport:
+        return RunnerReport(
+            run_id=handle.run_id,
+            adapter_id=handle.adapter_id,
+            status=handle.status,
+            exit_code=None,
+            local_execution=handle.local_execution,
+            remote_execution=False,
+            summary=handle.summary,
+        )
+
+    def report(self, handle: RunnerHandle) -> RunnerReport:
+        return self.finish(handle)
+
+    def build_command(self, request: RunnerRequest, run_dir: Path) -> list[str]:
+        probe = self._probe_for(request.repo)
+        if not probe.available:
+            raise ValueError(probe.detail)
+        model = _configured_openclaw_model()
+        task_path = run_dir / "openclaw-task.txt"
+        config_path = run_dir / "openclaw-config.json"
+        policy_path = run_dir / "transport-policy.json"
+        write_text(
+            task_path,
+            "Complete this bounded reasoning task without tools, delivery, gateways, channels, remote execution, "
+            "SSH, Docker, or background work. Return only a concise final response.\n\n"
+            + request.task,
+        )
+        strict_config = {
+            "gateway": {"mode": "local", "bind": "loopback"},
+            "agents": {"defaults": {"workspace": str(request.repo.resolve()), "skipBootstrap": True}},
+            "tools": {
+                "profile": "minimal",
+                "deny": ["*"],
+                "elevated": {"enabled": False},
+                "exec": {"mode": "deny"},
+            },
+        }
+        write_text(config_path, json.dumps(strict_config, indent=2))
+        transport_policy = {
+            "schema": OPENCLAW_TRANSPORT_POLICY_SCHEMA,
+            "transport_required": "embedded",
+            "tools_allowed": False,
+            "gateway_allowed": False,
+            "delivery_allowed": False,
+            "channels_allowed": False,
+            "ssh_allowed": False,
+            "docker_allowed": False,
+            "remote_execution": False,
+            "forbidden_flags": ["--deliver", "--channel", "--reply-to", "--reply-channel", "--reply-account", "--to"],
+        }
+        write_text(policy_path, json.dumps(transport_policy, indent=2))
+        session_key = re.sub(r"[^A-Za-z0-9_-]", "-", f"hamiltonian-{request.packet_id}")[:120]
+        command = [
+            *probe.command_prefix,
+            "agent",
+            "--agent",
+            "main",
+            "--session-key",
+            session_key,
+            "--message-file",
+            str(task_path),
+            "--model",
+            model,
+            "--verbose",
+            "off",
+            "--local",
+            "--json",
+        ]
+        forbidden = set(transport_policy["forbidden_flags"])
+        if forbidden.intersection(command):
+            raise ValueError("OpenClaw command violates the no-delivery transport policy")
+        return command
+
+    def build_environment(self, request: RunnerRequest, run_dir: Path) -> dict[str, str]:
+        return {
+            "OPENCLAW_CONFIG_PATH": str(run_dir / "openclaw-config.json"),
+            "OPENCLAW_CONFIG_DIR": str(run_dir),
+            "OPENCLAW_WORKSPACE_DIR": str(request.repo.resolve()),
+            "OPENCLAW_DISABLE_BONJOUR": "1",
+            "NO_COLOR": "1",
+        }
+
+    def validate_output(self, output_path: Path) -> str | None:
+        payload = _openclaw_output_payload(output_path)
+        if not payload:
+            return "OpenClaw did not return a parseable JSON result."
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        if meta.get("transport") != "embedded":
+            return "OpenClaw did not prove embedded local transport."
+        delivery = payload.get("deliveryStatus")
+        if isinstance(delivery, dict) and (delivery.get("requested") or delivery.get("attempted")):
+            return "OpenClaw reported a delivery attempt."
+        return None
+
+    def persist_final_message(self, output_path: Path, final_message_path: Path) -> None:
+        payload = _openclaw_output_payload(output_path) or {}
+        messages = [
+            str(item.get("text") or "").strip()
+            for item in payload.get("payloads") or []
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        if messages:
+            write_text(final_message_path, "\n\n".join(messages))
+
+
 def runner_adapter_for_lane(lane_id: str) -> RunnerAdapter:
     normalized = lane_id.lower().strip()
     if normalized == "codex":
         return CodexLocalRunnerAdapter()
     if normalized == "hermes":
         return HermesLocalRunnerAdapter()
+    if normalized == "openclaw":
+        return OpenClawLocalRunnerAdapter()
     return LocalDryRunRunnerAdapter(normalized)
 
 
@@ -948,6 +1282,8 @@ class LocalRunManager:
         report_path = run_dir / "runner-report.json"
         result_receipt_path = run_dir / "result-receipt.json"
         command = adapter.build_command(request, run_dir)
+        child_env = os.environ.copy()
+        child_env.update(adapter.build_environment(request, run_dir))
         started_at = _utc_now()
         creationflags = 0
         if os.name == "nt":
@@ -962,6 +1298,7 @@ class LocalRunManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 shell=False,
+                env=child_env,
                 creationflags=creationflags,
                 start_new_session=os.name != "nt",
             )
@@ -1139,7 +1476,9 @@ class LocalRunManager:
                 returncode = active.process.wait(timeout=5)
         if active.reader_thread:
             active.reader_thread.join(timeout=5)
-        active.adapter.persist_final_message(active.output_path, active.final_message_path)
+        validation_error = active.adapter.validate_output(active.output_path)
+        if not validation_error:
+            active.adapter.persist_final_message(active.output_path, active.final_message_path)
 
         label = _runner_label(active.request.lane_id)
         if active.cancel_requested:
@@ -1148,6 +1487,9 @@ class LocalRunManager:
         elif timed_out:
             status = "timed-out"
             summary = f"Local {label} run exceeded the {active.timeout_seconds}-second timeout."
+        elif validation_error:
+            status = "failed"
+            summary = validation_error
         elif returncode == 0:
             status = "succeeded"
             summary = f"Local {label} run completed successfully inside the bounded workspace."
@@ -1354,7 +1696,7 @@ def _packet_run_request(repo: Path, packet: dict[str, Any]) -> tuple[RunnerReque
     if str(packet.get("status")) != "execution-ready":
         raise ValueError("packet is not execution-ready")
     lane_id = str(lane.get("id") or packet.get("agent_id")).lower().strip()
-    if lane_id not in {"codex", "hermes"}:
+    if lane_id not in {"codex", "hermes", "openclaw"}:
         raise ValueError("this lane does not have a live local adapter")
     if int(gate_run.get("blocked") or 0) > 0:
         raise ValueError("blocked gates prevent local launch")

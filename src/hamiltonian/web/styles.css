@@ -2088,7 +2088,7 @@ select {
 .runner-control-state dl {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0 0 12px;
 }
 

@@ -203,3 +203,77 @@ def test_packet_runner_api_launches_hermes_adapter_and_persists_ui_state(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_packet_runner_api_launches_verified_embedded_openclaw_adapter(
+    tmp_path: Path,
+    fake_openclaw_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    init_git_repo(tmp_path)
+    monkeypatch.setenv("HAMILTONIAN_OPENCLAW_COMMAND", json.dumps(list(fake_openclaw_command)))
+    monkeypatch.setenv("HAMILTONIAN_OPENCLAW_MODEL", "provider/test-model")
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Analyse this bounded task and prepare a concise handoff.",
+        agent_id="openclaw",
+        stage="execute",
+        attach_evidence=False,
+    )
+    assert packet.runner_plan.launch_supported is True
+    assert packet.runner_plan.mode == "local-openclaw-embedded"
+
+    class Handler(CockpitHandler):
+        pass
+
+    Handler.repo = tmp_path
+    Handler.static_root = ROOT / "src" / "hamiltonian" / "web"
+    Handler.run_manager = LocalRunManager()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        query = urlencode({"repo": str(tmp_path)})
+        with urlopen(f"{base_url}/api/state?{query}", timeout=20) as response:
+            runtime = json.loads(response.read().decode("utf-8"))
+        status = next(adapter for adapter in runtime["runner_adapters"] if adapter["id"] == "openclaw")
+        assert status["available"] is True
+        assert status["mode"] == "local-openclaw-embedded"
+        assert status["remote_execution"] is False
+        assert status["capability_manifest"]["execution_kind"] == "tool-less-embedded-one-shot"
+
+        launch = Request(
+            f"{base_url}/api/packets/{packet.packet_id}/run?{query}",
+            data=json.dumps({"timeout_seconds": 10}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(launch, timeout=20) as response:
+            assert response.status == 201
+
+        deadline = time.monotonic() + 15
+        completed = None
+        while time.monotonic() < deadline:
+            with urlopen(
+                f"{base_url}/api/packets/{packet.packet_id}/run?{query}", timeout=20
+            ) as response:
+                completed = json.loads(response.read().decode("utf-8"))["run"]
+            if completed["status"] not in {"starting", "running", "cancelling"}:
+                break
+            time.sleep(0.05)
+
+        assert completed is not None
+        assert completed["status"] == "succeeded"
+        assert completed["adapter_id"] == "openclaw-local"
+        assert completed["last_message"] == "Synthetic OpenClaw embedded run completed locally."
+        assert completed["remote_execution"] is False
+        run_dir = Path(completed["run_dir"])
+        policy = json.loads((run_dir / "transport-policy.json").read_text(encoding="utf-8"))
+        assert policy["transport_required"] == "embedded"
+        assert policy["gateway_allowed"] is False
+        assert policy["delivery_allowed"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

@@ -54,7 +54,7 @@ def test_draft_packet_persists_pending_gates(tmp_path: Path) -> None:
     assert data["status"] == "drafted"
     assert data["agent_id"] == "openclaw"
     assert data["lane"]["id"] == "openclaw"
-    assert data["lane"]["kind"] == "external-agent-adapter"
+    assert data["lane"]["kind"] == "local-agent-adapter"
     assert data["lane"]["remote_execution"] is False
     assert data["lane"]["status"] == "selected"
     assert data["route"]["selected_lane_id"] == "openclaw"
@@ -539,7 +539,7 @@ def test_runtime_state_includes_recent_packets(tmp_path: Path) -> None:
     assert state["route_recommendations"][0]["lane_id"] == "codex"
     assert state["route_recommendations"][0]["status"] == "recommended"
     assert state["route_recommendations"][0]["remote_execution"] is False
-    assert {adapter["id"] for adapter in state["runner_adapters"]} == {"codex", "hermes"}
+    assert {adapter["id"] for adapter in state["runner_adapters"]} == {"codex", "hermes", "openclaw"}
     assert all(adapter["remote_execution"] is False for adapter in state["runner_adapters"])
     assert state["recent_packets"][0]["packet_id"] == packet.packet_id
     assert state["recent_packets"][0]["agent_id"] == "local"
@@ -568,6 +568,10 @@ def test_runtime_adapter_status_reports_ready_and_unavailable_without_paths(
         "hamiltonian.runtime.probe_hermes_command",
         lambda _repo: AdapterProbe(False, ("private-hermes-path",), "Hermes probe failed"),
     )
+    monkeypatch.setattr(
+        "hamiltonian.runtime.probe_openclaw_command",
+        lambda _repo: AdapterProbe(True, ("private-openclaw-path",), "OpenClaw test"),
+    )
 
     statuses = build_runner_adapters(tmp_path, git_available=True)
     encoded = json.dumps([status.__dict__ for status in statuses])
@@ -578,9 +582,13 @@ def test_runtime_adapter_status_reports_ready_and_unavailable_without_paths(
     assert statuses[1].available is False
     assert statuses[1].detail == "Hermes probe failed"
     assert "outside Hamiltonian" in statuses[1].setup_guidance
+    assert statuses[2].id == "openclaw"
+    assert statuses[2].available is True
+    assert statuses[2].mode == "local-openclaw-embedded"
     assert all(status.remote_execution is False for status in statuses)
     assert "private-codex-path" not in encoded
     assert "private-hermes-path" not in encoded
+    assert "private-openclaw-path" not in encoded
 
 
 def test_runtime_state_reflects_memory_fallback_mode(tmp_path: Path, monkeypatch) -> None:
@@ -988,6 +996,7 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'name="simple-agent-lane" value="auto"' in html
     assert 'name="simple-agent-lane" value="codex"' in html
     assert 'name="simple-agent-lane" value="hermes"' in html
+    assert 'name="simple-agent-lane" value="openclaw"' in html
     assert 'id="simple-lane-guidance"' in html
     assert 'data-testid="simple-lane-guidance"' in html
     assert 'id="simple-capability-fit"' in html

@@ -378,6 +378,40 @@ const journeyExpression = String.raw`
   }
   click('[data-page-target="start"]');
   await waitFor(() => activePage('start'), 'simple home after Hermes run');
+  click('input[name="simple-agent-lane"][value="openclaw"]');
+  setValue('#simple-task-input', 'Analyse this bounded result and prepare a concise handoff.');
+  await waitFor(
+    () => q('[data-testid="simple-run"]')?.textContent === 'Run with OpenClaw' && !q('[data-testid="simple-run"]')?.disabled,
+    'OpenClaw embedded lane readiness',
+  );
+  click('[data-testid="simple-run"]');
+  await waitFor(
+    () => q('[data-testid="simple-status"]')?.dataset.status === 'succeeded',
+    'OpenClaw embedded Mission Home run',
+    30000,
+  );
+  const openclawPacketId = q('#mission-home')?.dataset.packetId;
+  const openclawPacketResponse = await fetch(
+    '/api/packets/' + encodeURIComponent(openclawPacketId) + '?repo=' + encodeURIComponent(repo),
+  );
+  const openclawPacketPayload = await openclawPacketResponse.json();
+  if (!openclawPacketResponse.ok) throw new Error(openclawPacketPayload.error || 'OpenClaw packet detail failed');
+  if (openclawPacketPayload.packet.runner_plan?.mode !== 'local-openclaw-embedded') {
+    throw new Error('OpenClaw packet did not expose the embedded adapter');
+  }
+  const openclawRunResponse = await fetch(
+    '/api/packets/' + encodeURIComponent(openclawPacketId) + '/run?repo=' + encodeURIComponent(repo),
+  );
+  const openclawRunPayload = await openclawRunResponse.json();
+  if (!openclawRunResponse.ok) throw new Error(openclawRunPayload.error || 'OpenClaw run detail failed');
+  const openclawRun = openclawRunPayload.run;
+  if (openclawRun.adapter_id !== 'openclaw-local' || openclawRun.remote_execution !== false) {
+    throw new Error('OpenClaw did not preserve the forced-local adapter boundary');
+  }
+  if (openclawRun.last_message !== 'Synthetic OpenClaw embedded browser run completed locally.') {
+    throw new Error('OpenClaw final response was not persisted: ' + JSON.stringify(openclawRun));
+  }
+  if (openclawPacketPayload.packet.attach_evidence !== false) throw new Error('OpenClaw unexpectedly selected evidence');
   click('input[name="simple-agent-lane"][value="codex"]');
   await waitFor(() => q('[data-testid="simple-run"]')?.textContent === 'Run with Codex', 'Codex lane restore');
 
@@ -444,6 +478,10 @@ const journeyExpression = String.raw`
     hermes_packet_id: hermesPacketId,
     hermes_status: hermesRun.status,
     hermes_remote_execution: hermesRun.remote_execution,
+    openclaw_packet_id: openclawPacketId,
+    openclaw_status: openclawRun.status,
+    openclaw_transport: 'embedded',
+    openclaw_remote_execution: openclawRun.remote_execution,
     recorder_packet_id: recorderId,
     evidence_recorder: recorderPayload.packet.attach_evidence,
     cancellation_packet_id: cancelPacketId,
@@ -525,6 +563,7 @@ async function main() {
   const pythonPath = [path.join(projectRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
   const fakeCodexPath = path.join(runDir, "fake_codex.py");
   const fakeHermesPath = path.join(runDir, "fake_hermes.py");
+  const fakeOpenClawPath = path.join(runDir, "fake_openclaw.py");
   await writeFile(
     fakeCodexPath,
     `from __future__ import annotations
@@ -579,9 +618,39 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
 `,
     "utf8",
   );
+  await writeFile(
+    fakeOpenClawPath,
+    `from __future__ import annotations
+import json
+import os
+from pathlib import Path
+import sys
+
+if "--version" in sys.argv:
+    print("OpenClaw 9.9.9-browser-test")
+    raise SystemExit(0)
+if "agent" in sys.argv and "--help" in sys.argv:
+    print("--agent --session-key --message-file --model --verbose --local --json")
+    raise SystemExit(0)
+required = {"agent", "--agent", "--session-key", "--message-file", "--model", "--local", "--json"}
+if not required.issubset(sys.argv):
+    raise SystemExit(2)
+if any(flag in sys.argv for flag in ("--deliver", "--channel", "--reply-to", "--reply-channel", "--reply-account", "--to")):
+    raise SystemExit(3)
+config = json.loads(Path(os.environ["OPENCLAW_CONFIG_PATH"]).read_text(encoding="utf-8"))
+if config["tools"]["deny"] != ["*"] or config["gateway"]["mode"] != "local":
+    raise SystemExit(4)
+print(json.dumps({
+    "payloads": [{"text": "Synthetic OpenClaw embedded browser run completed locally."}],
+    "meta": {"transport": "embedded"},
+}), flush=True)
+`,
+    "utf8",
+  );
   await runProcess("git", ["init", "--quiet"], workspace);
   const codexCommand = JSON.stringify([python, fakeCodexPath]);
   const hermesCommand = JSON.stringify([python, fakeHermesPath]);
+  const openclawCommand = JSON.stringify([python, fakeOpenClawPath]);
   let serverOutput = "";
   const server = spawn(
     python,
@@ -593,6 +662,8 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
         PYTHONPATH: pythonPath,
         HAMILTONIAN_CODEX_COMMAND: codexCommand,
         HAMILTONIAN_HERMES_COMMAND: hermesCommand,
+        HAMILTONIAN_OPENCLAW_COMMAND: openclawCommand,
+        HAMILTONIAN_OPENCLAW_MODEL: "provider/browser-test-model",
       },
       windowsHide: true,
     },
@@ -761,6 +832,35 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
     await evaluate(client, `(async () => {
       window.scrollTo(0, 0);
       const input = document.querySelector('#simple-task-input');
+      input.value = 'Analyse this bounded result and prepare a concise handoff.';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const openClawLane = document.querySelector('input[name="simple-agent-lane"][value="openclaw"]');
+      if (openClawLane) openClawLane.checked = true;
+      state.simpleLane = 'openclaw';
+      await refreshSimpleRoutes();
+      renderSimpleLanePicker();
+      setSimpleRunState(
+        'succeeded',
+        'OpenClaw check complete',
+        'The tool-less embedded run completed locally and its receipt was verified.',
+        {
+          packetId: ${JSON.stringify(result.openclaw_packet_id)},
+          result: 'Synthetic OpenClaw embedded browser run completed locally.',
+        },
+      );
+      const capabilityDetails = document.querySelector('#simple-capability-details');
+      if (capabilityDetails) capabilityDetails.open = true;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const openClawPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-openclaw-embedded-desktop.jpg"),
+    );
+
+    await evaluate(client, `(async () => {
+      window.scrollTo(0, 0);
+      const input = document.querySelector('#simple-task-input');
       input.value = 'Run a read-only health check on this repository.';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       const autoLane = document.querySelector('input[name="simple-agent-lane"][value="auto"]');
@@ -848,7 +948,7 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.6.0");
+    ).replace("__HAMILTONIAN_VERSION__", "0.7.0");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -871,6 +971,7 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
       screenshots: {
         mission_home: homePath,
         capability_refusal: capabilityRefusalPath,
+        openclaw_embedded: openClawPath,
         health_check: checkPath,
         agent_comparison: comparisonPath,
         agent_comparison_mobile: comparisonMobilePath,

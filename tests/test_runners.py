@@ -15,9 +15,12 @@ from hamiltonian.runners import (
     HermesLocalRunnerAdapter,
     LocalRunManager,
     LocalDryRunRunnerAdapter,
+    OpenClawLocalRunnerAdapter,
     RunnerRequest,
     _configured_codex_command,
     _configured_hermes_command,
+    _configured_openclaw_command,
+    probe_openclaw_command,
     probe_hermes_command,
     read_latest_runner_state,
     runner_adapter_for_lane,
@@ -334,6 +337,110 @@ def test_local_run_manager_captures_hermes_one_shot_response(
     assert completed["result_receipt"]["lane_id"] == "hermes"
     assert completed["result_receipt"]["result_included"] is False
     assert any(event["type"] == "runner.succeeded" for event in completed["events"])
+
+
+def test_openclaw_probe_requires_embedded_agent_flags_and_model(
+    tmp_path: Path,
+    fake_openclaw_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HAMILTONIAN_OPENCLAW_COMMAND", json.dumps(list(fake_openclaw_command)))
+    monkeypatch.setenv("HAMILTONIAN_OPENCLAW_MODEL", "provider/test-model")
+
+    assert _configured_openclaw_command() == fake_openclaw_command
+    probe = probe_openclaw_command(tmp_path)
+    assert probe.available is True
+    assert "OpenClaw 9.9.9-test" in probe.detail
+
+    monkeypatch.delenv("HAMILTONIAN_OPENCLAW_MODEL")
+    unavailable = probe_openclaw_command(tmp_path, fake_openclaw_command)
+    assert unavailable.available is False
+    assert "HAMILTONIAN_OPENCLAW_MODEL" in unavailable.detail
+
+
+def test_openclaw_adapter_builds_strict_toolless_embedded_command(
+    tmp_path: Path,
+    fake_openclaw_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    init_git_repo(tmp_path)
+    monkeypatch.setenv("HAMILTONIAN_OPENCLAW_MODEL", "provider/test-model")
+    packet_dir = tmp_path / ".hamiltonian" / "tasks" / "packet-openclaw"
+    run_dir = packet_dir / "runner" / "runs" / "preview"
+    run_dir.mkdir(parents=True)
+    request = RunnerRequest(
+        packet_id="packet-openclaw",
+        lane_id="openclaw",
+        repo=tmp_path,
+        task="Prepare a concise analysis and handoff.",
+        gate_status="execution-ready",
+        blocked_gate_ids=(),
+        attach_evidence=False,
+    )
+    adapter = OpenClawLocalRunnerAdapter(command_prefix=fake_openclaw_command)
+
+    plan = adapter.prepare(request, packet_dir)
+    command = adapter.build_command(request, run_dir)
+    environment = adapter.build_environment(request, run_dir)
+    config = json.loads((run_dir / "openclaw-config.json").read_text(encoding="utf-8"))
+    policy = json.loads((run_dir / "transport-policy.json").read_text(encoding="utf-8"))
+
+    assert plan.adapter_available is True
+    assert plan.launch_supported is True
+    assert plan.mode == "local-openclaw-embedded"
+    assert plan.sandbox_policy == "tool-less-embedded-local"
+    assert command[: len(fake_openclaw_command)] == list(fake_openclaw_command)
+    assert "--local" in command
+    assert "--json" in command
+    assert command[command.index("--model") + 1] == "provider/test-model"
+    assert not set(policy["forbidden_flags"]).intersection(command)
+    assert config["gateway"] == {"mode": "local", "bind": "loopback"}
+    assert config["tools"]["deny"] == ["*"]
+    assert config["tools"]["elevated"]["enabled"] is False
+    assert environment["OPENCLAW_DISABLE_BONJOUR"] == "1"
+    assert environment["OPENCLAW_CONFIG_PATH"] == str(run_dir / "openclaw-config.json")
+    assert policy["gateway_allowed"] is False
+    assert policy["delivery_allowed"] is False
+    assert policy["remote_execution"] is False
+
+
+def test_local_run_manager_accepts_only_embedded_openclaw_output(
+    tmp_path: Path,
+    fake_openclaw_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    init_git_repo(tmp_path)
+    monkeypatch.setenv("HAMILTONIAN_OPENCLAW_MODEL", "provider/test-model")
+    manager = LocalRunManager()
+
+    def run(task: str, packet_id: str) -> dict:
+        packet_dir = tmp_path / ".hamiltonian" / "tasks" / packet_id
+        request = RunnerRequest(
+            packet_id=packet_id,
+            lane_id="openclaw",
+            repo=tmp_path,
+            task=task,
+            gate_status="execution-ready",
+            blocked_gate_ids=(),
+            attach_evidence=False,
+        )
+        adapter = OpenClawLocalRunnerAdapter(command_prefix=fake_openclaw_command)
+        plan = adapter.prepare(request, packet_dir)
+        manager.start(adapter, request, plan, packet_dir, timeout_seconds=10)
+        return wait_for_terminal_run(manager, packet_dir)
+
+    completed = run("Prepare a concise handoff.", "packet-openclaw-success")
+    refused = run("Analyse SIMULATE_NON_EMBEDDED output.", "packet-openclaw-refused")
+
+    assert completed["status"] == "succeeded"
+    assert completed["adapter_id"] == "openclaw-local"
+    assert completed["last_message"] == "Synthetic OpenClaw embedded run completed locally."
+    assert completed["result_receipt"]["lane_id"] == "openclaw"
+    assert completed["remote_execution"] is False
+    assert refused["status"] == "failed"
+    assert "did not prove embedded local transport" in refused["summary"]
+    assert refused["last_message"] == ""
+    assert refused["remote_execution"] is False
 
 
 def test_local_run_manager_streams_sanitized_events_and_report(

@@ -24,6 +24,7 @@ def test_capability_manifests_are_versioned_deterministic_and_local_only() -> No
     first = capability_manifest_for_lane("codex")
     second = capability_manifest_for_lane("codex")
     hermes = capability_manifest_for_lane("hermes")
+    openclaw = capability_manifest_for_lane("openclaw")
 
     assert first["schema"] == CAPABILITY_MANIFEST_SCHEMA
     assert first["manifest_version"] == 1
@@ -36,6 +37,11 @@ def test_capability_manifests_are_versioned_deterministic_and_local_only() -> No
     assert "handoff" in hermes["strengths"]
     assert "remote-execution" not in first["task_families"]
     assert "remote-execution" not in hermes["task_families"]
+    assert openclaw["adapter_id"] == "openclaw-local"
+    assert openclaw["execution_kind"] == "tool-less-embedded-one-shot"
+    assert openclaw["task_families"] == ("analysis", "handoff")
+    assert "all tools denied" in openclaw["safety_controls"]
+    assert openclaw["remote_execution"] is False
 
 
 def test_task_requirements_and_lane_fit_are_explained_without_task_text() -> None:

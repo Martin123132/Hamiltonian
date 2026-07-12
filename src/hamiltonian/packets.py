@@ -29,9 +29,9 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
         "summary": "Primary local implementation lane behind Hamiltonian gates.",
     },
     "openclaw": {
-        "name": "OpenClaw adapter",
-        "kind": "external-agent-adapter",
-        "summary": "External agent lane selected through an adapter boundary; no remote execution occurs in this prototype.",
+        "name": "OpenClaw",
+        "kind": "local-agent-adapter",
+        "summary": "Tool-less embedded one-shot reasoning with gateway, delivery, and remote execution disabled.",
     },
     "hermes": {
         "name": "Hermes Agent",
@@ -54,10 +54,10 @@ LANE_CONTRACTS: dict[str, dict[str, Any]] = {
         "evidence_policy": "Attach AgentLedger only when requested.",
     },
     "openclaw": {
-        "boundary": "external adapter lane",
-        "best_for": ["third-party agent experiments", "compatibility probes", "operator comparison"],
-        "avoid_for": ["direct execution", "private repo scraping", "credentialed work"],
-        "evidence_policy": "Represent evidence locally until a real adapter is wired.",
+        "boundary": "tool-less embedded local lane",
+        "best_for": ["task-text analysis", "structured handoff", "operator comparison"],
+        "avoid_for": ["repo inspection", "file edits", "commands", "gateway or delivery work"],
+        "evidence_policy": "Attach AgentLedger only when requested.",
     },
     "hermes": {
         "boundary": "local one-shot agent adapter",
@@ -292,6 +292,8 @@ def build_lane_contracts(
             status = "limited"
         elif lane_id == "hermes" and not hermes_ready:
             status = "adapter-unavailable"
+        elif lane_id == "openclaw":
+            status = "runtime-probed"
         contracts.append(
             {
                 "id": lane_id,
@@ -304,7 +306,7 @@ def build_lane_contracts(
                 "required_gates": ["memory", "intent", "cost"],
                 "remote_execution": False,
                 "evidence_policy": contract["evidence_policy"],
-                "adapter_ready": not external and (lane_id != "hermes" or hermes_ready),
+                "adapter_ready": (not external and lane_id not in {"hermes", "openclaw"}) or hermes_ready,
                 "memory_available": _available(by_name, "RepoMori"),
                 "capability_manifest": capability_manifest_for_lane(lane_id),
             }
@@ -373,7 +375,7 @@ def build_route_recommendations(
                 warnings.append("Hermes Agent CLI is unavailable; launch remains disabled.")
         elif lane_id == "openclaw":
             if "openclaw" in task.lower() or "open claw" in task.lower():
-                score += 8
+                score += 20
                 reasons.append("task explicitly references OpenClaw")
 
         if selected == lane_id:
