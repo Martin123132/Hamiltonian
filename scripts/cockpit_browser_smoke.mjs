@@ -194,7 +194,15 @@ const journeyExpression = String.raw`
   Object.assign(codexAdapter, codexReadyState);
   renderSimpleLanePicker();
 
-  setValue('#simple-task-input', 'Implement a bounded local cockpit journey and report the result.');
+  setValue('#simple-task-input', 'Start an SSH remote execution gateway on another machine.');
+  await waitFor(
+    () => q('#simple-capability-status')?.textContent === 'Not supported' && q('[data-testid="simple-run"]')?.disabled,
+    'capability manifest refusal',
+  );
+  if (q('#mission-home')?.dataset.packetId) throw new Error('Capability preview created a packet before launch');
+
+  setValue('#simple-task-input', 'Implement a bounded local cockpit journey and run tests.');
+  await waitFor(() => q('#simple-capability-status')?.textContent === 'Strong fit', 'Codex capability fit');
   click('[data-testid="simple-run"]');
   await waitFor(
     () => ['starting', 'running', 'succeeded'].includes(q('[data-testid="simple-status"]')?.dataset.status),
@@ -218,6 +226,9 @@ const journeyExpression = String.raw`
   if (packet.runner_run?.local_execution !== true) throw new Error('Local execution was not recorded');
   if (packet.runner_run?.remote_execution !== false) throw new Error('Remote execution unexpectedly enabled');
   if (packet.attach_evidence !== false) throw new Error('Evidence should remain optional on the main path');
+  if (packet.route?.capability_status !== 'strong') throw new Error('Strong route capability fit was not persisted');
+  if (packet.runner_plan?.capability_status !== 'strong') throw new Error('Runner capability fit was not persisted');
+  if (!packet.runner_plan?.capability_manifest_digest) throw new Error('Runner manifest fingerprint was not persisted');
 
   click('[data-testid="compare-agents"]');
   await waitFor(() => q('#comparison-dialog')?.open, 'comparison preview dialog');
@@ -422,6 +433,9 @@ const journeyExpression = String.raw`
     runner_status: packet.runner_run.status,
     remote_execution: packet.runner_run.remote_execution,
     evidence_main: packet.attach_evidence,
+    capability_fit: packet.route.capability_status,
+    capability_manifest: packet.runner_plan.capability_manifest_schema,
+    incompatible_preview_refused: true,
     comparison_id: comparisonId,
     comparison_packet_id: comparisonPacketId,
     comparison_status: 'complete',
@@ -728,13 +742,35 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
     await evaluate(client, `(async () => {
       window.scrollTo(0, 0);
       const input = document.querySelector('#simple-task-input');
+      input.value = 'Start an SSH remote execution gateway on another machine.';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const autoLane = document.querySelector('input[name="simple-agent-lane"][value="auto"]');
+      if (autoLane) autoLane.checked = true;
+      state.simpleLane = 'auto';
+      setSimpleRunState('idle', 'Ready', '', { packetId: null, result: '' });
+      await refreshSimpleRoutes();
+      renderSimpleLanePicker();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const capabilityRefusalPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-capability-refusal-desktop.jpg"),
+    );
+
+    await evaluate(client, `(async () => {
+      window.scrollTo(0, 0);
+      const input = document.querySelector('#simple-task-input');
       input.value = 'Run a read-only health check on this repository.';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       const autoLane = document.querySelector('input[name="simple-agent-lane"][value="auto"]');
       if (autoLane) autoLane.checked = true;
       state.simpleLane = 'auto';
       setSimpleRunState('idle', 'Ready', '', { packetId: null, result: '' });
+      await refreshSimpleRoutes();
       renderSimpleLanePicker();
+      const capabilityDetails = document.querySelector('#simple-capability-details');
+      if (capabilityDetails) capabilityDetails.open = true;
       const titles = [
         'Repository health check',
         'Release readiness review',
@@ -782,6 +818,8 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
       window.scrollTo(0, 0);
       document.activeElement?.blur();
       document.querySelector('#goal-dialog')?.close();
+      const capabilityDetails = document.querySelector('#simple-capability-details');
+      if (capabilityDetails) capabilityDetails.open = false;
       setSimpleRunState('idle', 'Ready', '', { packetId: null, result: '' });
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       return true;
@@ -810,7 +848,7 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.5.1");
+    ).replace("__HAMILTONIAN_VERSION__", "0.6.0");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -832,6 +870,7 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
       ...goalLifecycle,
       screenshots: {
         mission_home: homePath,
+        capability_refusal: capabilityRefusalPath,
         health_check: checkPath,
         agent_comparison: comparisonPath,
         agent_comparison_mobile: comparisonMobilePath,

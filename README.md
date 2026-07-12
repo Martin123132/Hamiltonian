@@ -28,6 +28,19 @@ Hamiltonian saves a task packet, evaluates its local safety, memory, and cost
 gates, then launches the selected callable agent lane only after the operator
 presses the main Run action.
 
+Before launch, a versioned capability manifest classifies the task and explains
+whether each worker is a strong fit, compatible, or unsupported. The expanded
+view shows declared strengths, safety controls, and limitations without
+confusing CLI availability with task suitability.
+
+![Hamiltonian capability fit](docs/images/capability-fit-desktop.jpg)
+
+Unsupported requirements stop before packet creation or process launch. Every
+current manifest refuses remote command execution, gateways, SSH, and delivery
+services.
+
+![Hamiltonian capability refusal](docs/images/capability-refusal-desktop.jpg)
+
 ![Completed Hamiltonian health check](docs/images/health-check-desktop.jpg)
 
 ### 2. Compare a second agent when the decision matters
@@ -89,8 +102,15 @@ windows.
   </tr>
 </table>
 
-## Version 0.5.1
+## Version 0.6.0
 
+- Versioned, deterministic capability manifests for Codex, Hermes, Local, and OpenClaw lanes.
+- Task requirement classification with `strong`, `compatible`, or `incompatible` adapter fit.
+- Capability-aware Auto routing that considers suitability separately from CLI availability.
+- Mission Home explanations for task requirements, worker strengths, safety controls, and limitations.
+- Hard refusal before packet creation when every callable adapter lacks a required capability.
+- Capability manifest schema, version, digest, fit, requirements, and missing capabilities persisted in route and runner-plan records.
+- Explicit remote-execution incompatibility across every current local adapter manifest.
 - Mission Home comparison history with verified answer rehydration.
 - Explicit operator decisions: Codex, Hermes, or Neither, with an optional sanitized reason.
 - One-click Codex goal creation from the selected result with comparison and packet lineage.
@@ -200,9 +220,9 @@ The build also writes:
 D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.1.zip
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.1.release.json
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.5.1.sha256
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.6.0.zip
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.6.0.release.json
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.6.0.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
@@ -319,11 +339,17 @@ and stores capped, sanitized lifecycle events plus the final response. It never
 uses the Codex danger-full-access or sandbox-bypass flags.
 
 Mission Home exposes `Auto`, `Codex`, and `Hermes` before the run starts. Auto
-uses task-aware route advice but selects only a callable adapter. Each lane
+uses task-aware route advice but selects only a callable, capability-compatible adapter. Each lane
 shows `Ready` or `Unavailable` in words, and unavailable lanes explain what the
 operator must configure outside Hamiltonian. Choosing a worker never installs
 software, edits credentials, or starts a process; execution still requires the
 main Run action.
+
+Adapter capability declarations use `hamiltonian.adapter-capabilities.v1`.
+Manifests contain no task text, credentials, workspace paths, or probe output.
+Runtime status reports availability separately. Route decisions and prepared
+runner plans persist the manifest fingerprint and task fit so later reviews can
+verify which declared boundary governed the decision.
 
 The Hermes lane can launch the official scripted one-shot boundary only after
 the same explicit operator action. Hamiltonian invokes `hermes` with safe mode,
@@ -407,7 +433,7 @@ It drives the one-button Home flow through successful completion and
 cancellation, checks that only four primary navigation choices are visible, and
 verifies unavailable guidance, Auto/Codex/Hermes selection, comparison consent,
 side-by-side receipts, comparison history, operator decisions, sanitized export,
-chosen-result goal lineage, optional recorder evidence, and a Hermes one-shot packet
+chosen-result goal lineage, capability fit and refusal, optional recorder evidence, and a Hermes one-shot packet
 through Mission Home in a real local Edge session. The smoke journey supplies deterministic local fakes for
 the Codex and Hermes commands, so it uses no model credits or credentials. QA
 packets are removed after the run. The

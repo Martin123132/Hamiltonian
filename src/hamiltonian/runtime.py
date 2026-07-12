@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .capabilities import capability_manifest_for_lane
 from .core import ensure_repo, is_git_repo, run_capture
 from .integrations import IntegrationStatus, detect_integrations
 from .packets import build_lane_contracts, build_route_recommendations, list_task_packets
@@ -40,6 +41,7 @@ class RunnerAdapterStatus:
     setup_guidance: str
     local_execution: bool
     remote_execution: bool
+    capability_manifest: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,7 @@ def build_runner_adapters(repo: Path, git_available: bool) -> list[RunnerAdapter
             ),
             local_execution=True,
             remote_execution=False,
+            capability_manifest=capability_manifest_for_lane("codex"),
         ),
         RunnerAdapterStatus(
             id="hermes",
@@ -151,6 +154,7 @@ def build_runner_adapters(repo: Path, git_available: bool) -> list[RunnerAdapter
             ),
             local_execution=True,
             remote_execution=False,
+            capability_manifest=capability_manifest_for_lane("hermes"),
         ),
     ]
 

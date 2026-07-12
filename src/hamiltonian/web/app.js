@@ -2495,13 +2495,17 @@ function simpleRouteOptions(data = state.data) {
   return state.simpleRoutes.length ? state.simpleRoutes : data?.route_recommendations || [];
 }
 
+function simpleRouteForLane(laneId, data = state.data) {
+  return simpleRouteOptions(data).find((route) => route.lane_id === laneId) || null;
+}
+
 function resolveSimpleLane(data = state.data) {
   const selected = simpleLaneSelection();
   if (selected === "codex" || selected === "hermes") return selected;
   const adapters = simpleAdapterStatuses(data);
   const routed = simpleRouteOptions(data)
     .filter((route) => route.lane_id === "codex" || route.lane_id === "hermes")
-    .find((route) => adapters.get(route.lane_id)?.available);
+    .find((route) => adapters.get(route.lane_id)?.available && route.capability_status !== "incompatible");
   if (routed) return routed.lane_id;
   const available = ["codex", "hermes"].find((laneId) => adapters.get(laneId)?.available);
   if (available) return available;
@@ -2519,7 +2523,54 @@ function simpleAdapterForLane(laneId, data = state.data) {
     detail: "Adapter status is unavailable.",
     safety: "Local supervised process; remote command execution remains off.",
     setup_guidance: "Reopen Hamiltonian to check this adapter again.",
+    capability_manifest: null,
   };
+}
+
+function renderCapabilityList(selector, values, emptyText) {
+  const list = $(selector);
+  if (!list) return;
+  clear(list);
+  const items = values?.length ? values : [emptyText];
+  items.forEach((value) => {
+    const item = document.createElement("li");
+    item.textContent = String(value).replaceAll("-", " ");
+    list.appendChild(item);
+  });
+}
+
+function renderSimpleCapabilityFit(adapter, route) {
+  const fit = route?.capability_fit || {
+    status: "not-evaluated",
+    requirements: ["general"],
+    missing_capabilities: [],
+    summary: "Write a task to evaluate this worker.",
+  };
+  const manifest = adapter.capability_manifest || {};
+  const panel = $("#simple-capability-fit");
+  if (panel) panel.dataset.status = fit.status;
+  setText(
+    "#simple-capability-status",
+    {
+      strong: "Strong fit",
+      compatible: "Compatible",
+      incompatible: "Not supported",
+      "not-evaluated": "Not evaluated",
+    }[fit.status] || "Review required",
+  );
+  const requirements = $("#simple-capability-requirements");
+  if (requirements) {
+    clear(requirements);
+    (fit.requirements || ["general"]).forEach((requirement) => {
+      const chip = document.createElement("span");
+      chip.textContent = String(requirement).replaceAll("-", " ");
+      if ((fit.missing_capabilities || []).includes(requirement)) chip.dataset.missing = "true";
+      requirements.appendChild(chip);
+    });
+  }
+  renderCapabilityList("#simple-capability-strengths", manifest.strengths, "No declared specialist strength");
+  renderCapabilityList("#simple-capability-safety", manifest.safety_controls, "Local supervision");
+  renderCapabilityList("#simple-capability-limitations", manifest.limitations, "Manifest unavailable");
 }
 
 function renderSimpleLanePicker(data = state.data) {
@@ -2531,6 +2582,7 @@ function renderSimpleLanePicker(data = state.data) {
   const active = simpleRunIsActive() || ["saving", "checking"].includes(state.simpleRun.status);
   const routes = simpleRouteOptions(data);
   const routed = routes.find((route) => route.lane_id === resolvedLane);
+  const capabilityBlocked = routed?.capability_status === "incompatible";
 
   ["codex", "hermes"].forEach((laneId) => {
     const current = simpleAdapterForLane(laneId, data);
@@ -2550,20 +2602,35 @@ function renderSimpleLanePicker(data = state.data) {
   });
 
   const guidance = $("#simple-lane-guidance");
-  if (guidance) guidance.dataset.available = String(Boolean(adapter.available));
+  if (guidance) {
+    guidance.dataset.available = String(Boolean(adapter.available));
+    guidance.dataset.capabilityStatus = routed?.capability_status || "not-evaluated";
+  }
   setText("#simple-lane-guidance-status", selected === "auto" ? "Recommendation" : "Your selection");
-  setText("#simple-lane-guidance-title", `${adapter.name} ${adapter.available ? "is ready" : "needs setup"}`);
+  setText(
+    "#simple-lane-guidance-title",
+    capabilityBlocked
+      ? `${adapter.name} cannot run this task`
+      : `${adapter.name} ${adapter.available ? "is ready" : "needs setup"}`,
+  );
   setText(
     "#simple-lane-guidance-body",
-    adapter.available
+    capabilityBlocked
+      ? `${routed?.capability_fit?.summary || "This task needs an unsupported capability."} Remote execution remains off. Rewrite the task to continue.`
+      : adapter.available
       ? selected === "auto"
-        ? `${routed?.summary || `${adapter.name} is the best callable fit for this task.`} ${adapter.safety}`
-        : `Hamiltonian will record your ${adapter.name} choice in the packet. ${adapter.safety}`
+        ? `${routed?.capability_fit?.summary || routed?.summary || `${adapter.name} is the best callable fit for this task.`} ${adapter.safety}`
+        : `${routed?.capability_fit?.summary || "Capability fit recorded."} Hamiltonian will record your ${adapter.name} choice in the packet. ${adapter.safety}`
       : `${adapter.detail} ${adapter.setup_guidance}`,
   );
+  renderSimpleCapabilityFit(adapter, routed);
   setText("#simple-runtime-agent", selected === "auto" ? `Auto: ${adapter.name}` : adapter.name);
   const runButton = $("#simple-run-button");
-  if (runButton && !active) runButton.textContent = `Run with ${adapter.name}`;
+  if (runButton && !active) {
+    runButton.textContent = capabilityBlocked ? "Task not supported" : `Run with ${adapter.name}`;
+    runButton.disabled = !adapter.available || capabilityBlocked;
+    runButton.title = capabilityBlocked ? "Rewrite the task to remove unsupported capabilities." : "";
+  }
 }
 
 function scheduleSimpleRouteUpdate(delay = 250) {

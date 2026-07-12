@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from .adapters import run_repomori_memory_adapter
+from .capabilities import capability_manifest_for_lane, evaluate_capability_fit
 from .core import ensure_repo, is_git_repo, write_text
 from .integrations import IntegrationStatus, detect_integrations
 from .runners import (
@@ -147,6 +148,10 @@ class RouteDecision:
     warnings: list[str]
     remote_execution: bool
     policy: str
+    capability_status: str
+    task_requirements: list[str]
+    missing_capabilities: list[str]
+    capability_manifest_digest: str
 
 
 @dataclass(frozen=True)
@@ -301,6 +306,7 @@ def build_lane_contracts(
                 "evidence_policy": contract["evidence_policy"],
                 "adapter_ready": not external and (lane_id != "hermes" or hermes_ready),
                 "memory_available": _available(by_name, "RepoMori"),
+                "capability_manifest": capability_manifest_for_lane(lane_id),
             }
         )
     return contracts
@@ -332,6 +338,7 @@ def build_route_recommendations(
         score = base_scores[lane_id]
         reasons = [LANE_CONTRACTS[lane_id]["boundary"]]
         warnings: list[str] = []
+        capability_fit = evaluate_capability_fit(task, lane_id)
 
         if lane_id == "codex":
             if git_available:
@@ -373,6 +380,16 @@ def build_route_recommendations(
             score += 3
             reasons.append("operator selected this lane")
 
+        score += int(capability_fit["score_adjustment"])
+        reasons.append(capability_fit["summary"])
+        if capability_fit["status"] == "incompatible":
+            score = min(score, 35)
+            warnings.append(
+                "Capability manifest refuses this task requirement: "
+                + ", ".join(capability_fit["missing_capabilities"])
+                + "."
+            )
+
         if external:
             score = min(score, 66)
             warnings.append("Adapter is represented locally; remote execution is off.")
@@ -392,13 +409,20 @@ def build_route_recommendations(
                 "warnings": warnings,
                 "remote_execution": False,
                 "selected": selected == lane_id,
+                "capability_fit": capability_fit,
+                "capability_status": capability_fit["status"],
+                "task_requirements": capability_fit["requirements"],
+                "missing_capabilities": capability_fit["missing_capabilities"],
+                "capability_manifest_digest": capability_fit["manifest_digest"],
             }
         )
 
     recommendations.sort(key=lambda item: (-int(item["score"]), str(item["lane_id"])))
     for index, item in enumerate(recommendations, start=1):
         item["rank"] = index
-        if index == 1:
+        if item["capability_status"] == "incompatible":
+            item["status"] = "unsupported"
+        elif index == 1:
             item["status"] = "recommended"
         elif item["warnings"]:
             item["status"] = "review"
@@ -424,7 +448,10 @@ def recommend_route(
         top,
     )
     recommended_id = str(top["lane_id"])
-    status = "recommended" if selected == recommended_id else "operator-override"
+    if selected_item["capability_status"] == "incompatible":
+        status = "capability-blocked"
+    else:
+        status = "recommended" if selected == recommended_id else "operator-override"
     warnings = list(selected_item["warnings"])
     if status == "operator-override":
         warnings.append(
@@ -449,6 +476,10 @@ def recommend_route(
             "Route advice is local metadata only and never launches an agent. "
             "Execution requires a separate operator action; remote execution stays off."
         ),
+        capability_status=str(selected_item["capability_status"]),
+        task_requirements=list(selected_item["task_requirements"]),
+        missing_capabilities=list(selected_item["missing_capabilities"]),
+        capability_manifest_digest=str(selected_item["capability_manifest_digest"]),
     )
 
 
@@ -642,6 +673,7 @@ def _runner_plan(
             mode="local-dry-run",
             summary="Runner plan was not prepared because readiness gates blocked the packet.",
             next_action="Clear blocked gates before preparing a launch plan.",
+            task=task,
         )
     if execution_boundary.status == "needs-review":
         return runner_plan_state(
@@ -650,6 +682,7 @@ def _runner_plan(
             mode="local-dry-run",
             summary="Runner plan is paused until the operator reviews gate warnings.",
             next_action="Review warnings before preparing a launch plan.",
+            task=task,
         )
     if stage == "handoff" and execution_boundary.status in {"completed", "run-failed"} and previous_plan:
         return runner_plan_from_dict(previous_plan)
@@ -660,6 +693,7 @@ def _runner_plan(
             mode="inactive",
             summary="Runner contract is available but no launch plan has been prepared for this stage.",
             next_action="Run gates, then use Prepare execute to write the local dry-run plan.",
+            task=task,
         )
 
     request = RunnerRequest(
@@ -967,6 +1001,10 @@ def build_packet_markdown(packet: TaskPacket) -> str:
         f"- Recommended: `{packet.route.recommended_lane_name}`",
         f"- Selected: `{packet.route.selected_lane_name}`",
         f"- Confidence: `{packet.route.confidence}`",
+        f"- Capability fit: `{packet.route.capability_status}`",
+        f"- Task requirements: `{', '.join(packet.route.task_requirements) or 'general'}`",
+        f"- Missing capabilities: `{', '.join(packet.route.missing_capabilities) or 'none'}`",
+        f"- Capability manifest: `{packet.route.capability_manifest_digest}`",
         f"- Remote execution: `{packet.route.remote_execution}`",
         f"- Summary: {packet.route.summary}",
         f"- Policy: {packet.route.policy}",
@@ -1004,6 +1042,11 @@ def build_packet_markdown(packet: TaskPacket) -> str:
             f"- Mode: `{packet.runner_plan.mode}`",
             f"- Lifecycle: `{', '.join(packet.runner_plan.lifecycle)}`",
             f"- Launch supported: `{packet.runner_plan.launch_supported}`",
+            f"- Capability manifest: `{packet.runner_plan.capability_manifest_schema}` v{packet.runner_plan.capability_manifest_version}",
+            f"- Capability manifest digest: `{packet.runner_plan.capability_manifest_digest}`",
+            f"- Capability fit: `{packet.runner_plan.capability_status}`",
+            f"- Task requirements: `{', '.join(packet.runner_plan.task_requirements) or 'general'}`",
+            f"- Missing capabilities: `{', '.join(packet.runner_plan.missing_capabilities) or 'none'}`",
             f"- Local execution: `{packet.runner_plan.local_execution}`",
             f"- Remote execution: `{packet.runner_plan.remote_execution}`",
             f"- Summary: {packet.runner_plan.summary}",
