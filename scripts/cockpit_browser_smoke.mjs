@@ -257,8 +257,45 @@ const journeyExpression = String.raw`
   if (comparisonsPayload.comparisons[0].result_text_included !== false) {
     throw new Error('Saved comparison claimed to include answer text');
   }
+  click('#comparison-select-hermes');
+  setValue('#comparison-decision-reason', 'More direct and easier to hand off.');
+  click('#comparison-save-decision');
+  await waitFor(
+    () => state.comparison?.decision?.selected_lane_id === 'hermes',
+    'saved comparison decision',
+  );
+  if (q('#comparison-create-goal')?.disabled) throw new Error('Chosen result did not enable goal creation');
+  click('#comparison-export');
+  await waitFor(
+    () => q('#comparison-dialog-status')?.textContent.includes('comparison-export.md'),
+    'sanitized comparison export',
+  );
   click('#comparison-cancel-button');
   await waitFor(() => !q('#comparison-dialog')?.open, 'comparison dialog close');
+  const historyRow = await waitFor(
+    () => [...document.querySelectorAll('[data-testid="comparison-history-row"]')].find(
+      (row) => row.dataset.comparisonId === comparisonId,
+    ),
+    'comparison history row',
+  );
+  historyRow.click();
+  await waitFor(
+    () => q('#comparison-dialog')?.open && state.comparison?.source === 'history' && state.comparison?.status === 'complete',
+    'reopened comparison history',
+  );
+  if (!q('#comparison-secondary-result')?.textContent.includes('Synthetic Hermes Agent browser run')) {
+    throw new Error('Saved comparison did not rehydrate the Hermes result');
+  }
+  click('#comparison-create-goal');
+  await waitFor(() => q('#goal-dialog')?.open, 'chosen-result goal builder');
+  await waitFor(
+    () => {
+      const preview = q('[data-testid="goal-preview"]')?.textContent || '';
+      return preview.includes('Source comparison:') && preview.includes(comparisonId);
+    },
+    'comparison goal lineage',
+  );
+  click('#goal-dialog-close');
 
   const hermesAdapter = state.data.runner_adapters.find((adapter) => adapter.id === 'hermes');
   if (!hermesAdapter?.available) throw new Error('Hermes fake adapter was not reported ready');
@@ -388,6 +425,8 @@ const journeyExpression = String.raw`
     comparison_id: comparisonId,
     comparison_packet_id: comparisonPacketId,
     comparison_status: 'complete',
+    comparison_decision: 'hermes',
+    comparison_history_reopened: true,
     hermes_packet_id: hermesPacketId,
     hermes_status: hermesRun.status,
     hermes_remote_execution: hermesRun.remote_execution,
@@ -771,7 +810,7 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.5.0");
+    ).replace("__HAMILTONIAN_VERSION__", "0.5.1");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,

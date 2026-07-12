@@ -13,10 +13,15 @@ from urllib.request import Request, urlopen
 import pytest
 
 from hamiltonian.comparisons import (
+    COMPARISON_EXPORT_SCHEMA,
     COMPARISON_SCHEMA,
     create_result_comparison,
+    export_comparison_receipt,
+    hydrate_result_comparison,
     list_result_comparisons,
+    save_comparison_decision,
 )
+from hamiltonian.goals import create_goal_package
 from hamiltonian.packets import create_task_packet, get_task_packet
 from hamiltonian.runners import LocalRunManager, start_packet_run
 from hamiltonian.server import CockpitHandler
@@ -98,6 +103,105 @@ def test_result_comparison_rejects_mismatched_tasks(
         create_result_comparison(tmp_path, codex["packet_id"], hermes["packet_id"])
 
 
+def test_comparison_decision_and_export_preserve_sanitized_lineage(
+    tmp_path: Path,
+    fake_codex_command: tuple[str, ...],
+    fake_hermes_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    init_git_repo(tmp_path)
+    monkeypatch.setenv("HAMILTONIAN_CODEX_COMMAND", json.dumps(list(fake_codex_command)))
+    monkeypatch.setenv("HAMILTONIAN_HERMES_COMMAND", json.dumps(list(fake_hermes_command)))
+    manager = LocalRunManager()
+    task = "Choose the strongest bounded local result."
+    codex = run_packet(tmp_path, manager, task, "codex")
+    hermes = run_packet(tmp_path, manager, task, "hermes")
+    comparison = create_result_comparison(tmp_path, codex["packet_id"], hermes["packet_id"])
+
+    decided = save_comparison_decision(
+        tmp_path,
+        comparison["comparison_id"],
+        "hermes",
+        r"Clearer result at D:\private\repo; token=do-not-store; https://private.example.test/path",
+    )
+    assert decided["decision"]["status"] == "selected"
+    assert decided["decision"]["selected_lane_id"] == "hermes"
+    assert decided["decision"]["selected_packet_id"] == hermes["packet_id"]
+    assert "<local-path>" in decided["decision"]["reason"]
+    assert "token=<redacted>" in decided["decision"]["reason"]
+    assert "<remote-url>" in decided["decision"]["reason"]
+
+    export = export_comparison_receipt(tmp_path, comparison["comparison_id"])
+    export_text = Path(export["artifact_path"]).read_text(encoding="utf-8")
+    assert export["schema"] == COMPARISON_EXPORT_SCHEMA
+    assert export["result_text_included"] is False
+    assert "Synthetic Codex run completed locally." not in export_text
+    assert "Synthetic Hermes Agent run completed locally." not in export_text
+    assert str(tmp_path.resolve()) not in export_text
+    assert decided["primary"]["result_digest"] in export_text
+    assert decided["secondary"]["result_digest"] in export_text
+
+    goal = create_goal_package(
+        tmp_path,
+        "maintenance",
+        "Repository health: **B**\n\nUse the selected result.",
+        source_packet_id=hermes["packet_id"],
+        source_comparison_id=comparison["comparison_id"],
+    )
+    assert goal.source_comparison_id == comparison["comparison_id"]
+    assert f"Source comparison: `{comparison['comparison_id']}`" in goal.goal_markdown
+    with pytest.raises(ValueError, match="does not match"):
+        create_goal_package(
+            tmp_path,
+            "maintenance",
+            "Repository health: **B**",
+            source_packet_id=codex["packet_id"],
+            source_comparison_id=comparison["comparison_id"],
+        )
+
+
+def test_comparison_reopen_degrades_when_original_result_is_missing(
+    tmp_path: Path,
+    fake_codex_command: tuple[str, ...],
+    fake_hermes_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    init_git_repo(tmp_path)
+    monkeypatch.setenv("HAMILTONIAN_CODEX_COMMAND", json.dumps(list(fake_codex_command)))
+    monkeypatch.setenv("HAMILTONIAN_HERMES_COMMAND", json.dumps(list(fake_hermes_command)))
+    manager = LocalRunManager()
+    task = "Reopen a saved comparison safely."
+    codex = run_packet(tmp_path, manager, task, "codex")
+    hermes = run_packet(tmp_path, manager, task, "hermes")
+    comparison = create_result_comparison(tmp_path, codex["packet_id"], hermes["packet_id"])
+    Path(codex["packet_dir"]).joinpath("runner", "latest-run.json").unlink()
+
+    hydrated = hydrate_result_comparison(tmp_path, comparison["comparison_id"])
+    assert hydrated["results"]["primary"]["available"] is False
+    assert hydrated["results"]["primary"]["result"] == ""
+    assert hydrated["results"]["secondary"]["available"] is True
+    assert hydrated["comparison"]["result_text_included"] is False
+
+
+def test_comparison_decision_rejects_unknown_selection(
+    tmp_path: Path,
+    fake_codex_command: tuple[str, ...],
+    fake_hermes_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    init_git_repo(tmp_path)
+    monkeypatch.setenv("HAMILTONIAN_CODEX_COMMAND", json.dumps(list(fake_codex_command)))
+    monkeypatch.setenv("HAMILTONIAN_HERMES_COMMAND", json.dumps(list(fake_hermes_command)))
+    manager = LocalRunManager()
+    task = "Reject an unknown comparison choice."
+    codex = run_packet(tmp_path, manager, task, "codex")
+    hermes = run_packet(tmp_path, manager, task, "hermes")
+    comparison = create_result_comparison(tmp_path, codex["packet_id"], hermes["packet_id"])
+
+    with pytest.raises(ValueError, match="codex, hermes, or neither"):
+        save_comparison_decision(tmp_path, comparison["comparison_id"], "remote-agent")
+
+
 def test_comparison_api_returns_runtime_answers_but_persists_only_receipts(
     tmp_path: Path,
     fake_codex_command: tuple[str, ...],
@@ -150,6 +254,38 @@ def test_comparison_api_returns_runtime_answers_but_persists_only_receipts(
         stored = Path(listed[0]["artifact_path"]).read_text(encoding="utf-8")
         assert "Synthetic Codex" not in stored
         assert "Synthetic Hermes" not in stored
+
+        comparison_id = payload["comparison"]["comparison_id"]
+        with urlopen(
+            f"{base_url}/api/comparisons/{comparison_id}?{query}", timeout=20
+        ) as response:
+            detail = json.loads(response.read().decode("utf-8"))
+        assert detail["results"]["primary"]["available"] is True
+        assert detail["results"]["primary"]["result"] == "Synthetic Codex run completed locally."
+        assert detail["results"]["secondary"]["result"] == "Synthetic Hermes Agent run completed locally."
+
+        decision_request = Request(
+            f"{base_url}/api/comparisons/{comparison_id}/decision",
+            data=json.dumps(
+                {"repo": str(tmp_path), "selected_lane_id": "hermes", "reason": "More direct."}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(decision_request, timeout=20) as response:
+            decision = json.loads(response.read().decode("utf-8"))["comparison"]["decision"]
+        assert decision["selected_packet_id"] == hermes["packet_id"]
+
+        export_request = Request(
+            f"{base_url}/api/comparisons/{comparison_id}/export",
+            data=json.dumps({"repo": str(tmp_path)}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(export_request, timeout=20) as response:
+            exported = json.loads(response.read().decode("utf-8"))["export"]
+        assert exported["filename"] == "comparison-export.md"
+        assert exported["result_text_included"] is False
     finally:
         server.shutdown()
         server.server_close()

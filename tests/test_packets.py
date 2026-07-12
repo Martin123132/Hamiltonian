@@ -1007,6 +1007,15 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="comparison-primary-result"' in html
     assert 'id="comparison-secondary-result"' in html
     assert 'id="comparison-run-button"' in html
+    assert 'id="home-comparison-history"' in html
+    assert 'id="comparison-history-list"' in html
+    assert 'id="comparison-decision"' in html
+    assert 'id="comparison-select-codex"' in html
+    assert 'id="comparison-select-hermes"' in html
+    assert 'id="comparison-select-neither"' in html
+    assert 'id="comparison-save-decision"' in html
+    assert 'id="comparison-create-goal"' in html
+    assert 'id="comparison-export"' in html
     assert 'data-testid="run-comparison"' in html
     assert 'data-testid="get-codex-goal"' in html
     assert 'id="goal-dialog"' in html
@@ -1218,6 +1227,11 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function runComparison" in app
     assert "function pollComparisonRun" in app
     assert "function persistComparison" in app
+    assert "function renderComparisonHistory" in app
+    assert "function openSavedComparison" in app
+    assert "function saveComparisonDecision" in app
+    assert "function openGoalBuilderFromComparison" in app
+    assert "function exportComparison" in app
     assert 'fetch("/api/comparisons"' in app
     assert "function refreshGoalPreview" in app
     assert "function ensureGoalSaved" in app
@@ -1425,6 +1439,8 @@ def test_static_ui_targets_packet_api() -> None:
     assert ".comparison-dialog" in styles
     assert ".comparison-results" in styles
     assert ".comparison-result-text" in styles
+    assert ".comparison-history-row" in styles
+    assert ".comparison-decision-options" in styles
     assert ".detail-panel-section" in styles
     assert ".packet-detail-tabs button" in styles
     assert ".mission-packet-object" in styles

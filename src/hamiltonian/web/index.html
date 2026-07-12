@@ -164,6 +164,17 @@
             <div id="home-recent-packets" class="home-recent-packets" aria-live="polite"></div>
           </section>
 
+          <section id="home-comparison-history" class="simple-comparison-history" aria-label="Agent comparison history">
+            <div class="simple-section-head">
+              <div>
+                <p class="eyebrow">Agent decisions</p>
+                <h3>Comparison history</h3>
+              </div>
+              <span id="comparison-history-summary" class="goal-history-summary">No comparisons yet</span>
+            </div>
+            <div id="comparison-history-list" class="comparison-history-list" aria-live="polite"></div>
+          </section>
+
           <section id="home-goal-history" class="simple-goal-history" aria-label="Codex goal history">
             <div class="simple-section-head">
               <div>
@@ -255,6 +266,30 @@
               <p id="comparison-secondary-receipt" class="comparison-receipt">Receipt will appear after completion.</p>
             </section>
           </div>
+
+          <section id="comparison-decision" class="comparison-decision" aria-label="Choose the preferred result" hidden>
+            <div class="comparison-decision-head">
+              <div>
+                <span>Operator decision</span>
+                <strong>Which result should move forward?</strong>
+              </div>
+              <span id="comparison-decision-state">Not decided</span>
+            </div>
+            <div class="comparison-decision-options" role="radiogroup" aria-label="Preferred agent result">
+              <button id="comparison-select-codex" type="button" role="radio" aria-checked="false" data-lane="codex">Use Codex</button>
+              <button id="comparison-select-hermes" type="button" role="radio" aria-checked="false" data-lane="hermes">Use Hermes</button>
+              <button id="comparison-select-neither" type="button" role="radio" aria-checked="false" data-lane="neither">Neither</button>
+            </div>
+            <label class="comparison-reason" for="comparison-decision-reason">
+              Short reason <span>optional</span>
+              <textarea id="comparison-decision-reason" maxlength="500" placeholder="What made this the better result?"></textarea>
+            </label>
+            <div class="comparison-decision-actions">
+              <button id="comparison-save-decision" class="compact-button" type="button">Save decision</button>
+              <button id="comparison-create-goal" class="primary-action" type="button" disabled>Create goal from chosen result</button>
+              <button id="comparison-export" class="compact-button" type="button">Export receipt</button>
+            </div>
+          </section>
 
           <p id="comparison-dialog-status" class="comparison-dialog-status" aria-live="polite">Comparison preview stays local.</p>
           <footer class="comparison-dialog-actions">
