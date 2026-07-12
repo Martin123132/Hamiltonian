@@ -89,6 +89,12 @@ availability and setup guidance, and let the operator override the worker. It
 must not install agent software, configure provider credentials, or hide which
 lane will receive the packet.
 
+Agent comparison is an optional second-opinion workflow, not automatic fan-out.
+Opening a comparison must not create a packet or launch an agent. The operator
+must explicitly approve one additional run on the exact same task. Durable
+comparison records should contain packet references and standardized receipt
+metadata, while final answer text remains in the original local runner files.
+
 The packet index is a local manifest/cache for recent packet summaries. It is
 not a remote telemetry feed and should be rebuilt from packet files if missing
 or invalid.

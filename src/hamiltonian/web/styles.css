@@ -5814,6 +5814,116 @@ body[data-active-page="advanced"] .topbar .repo-form {
   background: rgba(3, 5, 7, 0.82);
 }
 
+.comparison-dialog {
+  background: #0d1116;
+  border: 1px solid #3a4652;
+  border-radius: 8px;
+  box-shadow: var(--shadow-deep);
+  color: var(--ink);
+  max-height: min(860px, calc(100vh - 40px));
+  max-width: min(1120px, calc(100vw - 40px));
+  overflow: auto;
+  padding: 22px;
+  width: 100%;
+}
+
+.comparison-dialog[open] {
+  display: grid;
+  gap: 18px;
+}
+
+.comparison-dialog::backdrop {
+  background: rgba(3, 5, 7, 0.82);
+}
+
+.comparison-dialog-head,
+.comparison-dialog-actions,
+.comparison-result-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.comparison-dialog-head h2 {
+  font-size: 24px;
+}
+
+.comparison-boundary {
+  border-left: 2px solid var(--accent);
+  display: grid;
+  gap: 4px;
+  padding: 5px 0 5px 14px;
+}
+
+.comparison-boundary > span,
+.comparison-result-head > span {
+  color: var(--accent-soft);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.comparison-boundary > strong {
+  font-size: 15px;
+}
+
+.comparison-boundary > p,
+.comparison-dialog-status,
+.comparison-receipt {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.comparison-boundary[data-status="unavailable"],
+.comparison-boundary[data-status="failed"],
+.comparison-boundary[data-status="cancelled"] {
+  border-left-color: var(--advisory);
+}
+
+.comparison-results {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.comparison-result-column {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 14px;
+}
+
+.comparison-result-head strong {
+  font-size: 15px;
+}
+
+.comparison-result-text {
+  background: #080b0f;
+  border: 1px solid #26313b;
+  border-radius: 6px;
+  color: #dce2e9;
+  font-family: Consolas, ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  min-height: 230px;
+  overflow: auto;
+  padding: 14px;
+  white-space: pre-wrap;
+}
+
+.comparison-dialog-actions {
+  justify-content: flex-end;
+}
+
+.comparison-dialog-actions button {
+  min-height: 42px;
+}
+
 .goal-dialog-head,
 .goal-preview-head,
 .goal-dialog-actions {
@@ -5981,6 +6091,34 @@ body[data-active-page="advanced"] .topbar .repo-form {
   }
 
   .goal-dialog-actions button {
+    width: 100%;
+  }
+
+  .comparison-dialog {
+    max-height: calc(100vh - 20px);
+    max-width: calc(100vw - 20px);
+    padding: 14px;
+  }
+
+  .comparison-results,
+  .comparison-dialog-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .comparison-results {
+    display: grid;
+  }
+
+  .comparison-result-text {
+    min-height: 150px;
+  }
+
+  .comparison-dialog-actions {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .comparison-dialog-actions button {
     width: 100%;
   }
 }

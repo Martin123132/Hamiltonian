@@ -219,6 +219,47 @@ const journeyExpression = String.raw`
   if (packet.runner_run?.remote_execution !== false) throw new Error('Remote execution unexpectedly enabled');
   if (packet.attach_evidence !== false) throw new Error('Evidence should remain optional on the main path');
 
+  click('[data-testid="compare-agents"]');
+  await waitFor(() => q('#comparison-dialog')?.open, 'comparison preview dialog');
+  await waitFor(
+    () => q('#comparison-boundary-label')?.textContent === 'Preview only',
+    'comparison preview boundary',
+  );
+  if (state.comparison?.secondaryPacketId) throw new Error('Comparison preview launched a second packet');
+  if (q('#comparison-secondary-name')?.textContent !== 'Hermes Agent') {
+    throw new Error('Comparison did not select the counterpart agent');
+  }
+  click('[data-testid="run-comparison"]');
+  await waitFor(
+    () => ['complete', 'failed', 'cancelled', 'unavailable'].includes(state.comparison?.status),
+    'terminal agent comparison',
+    30000,
+  );
+  if (state.comparison?.status !== 'complete') {
+    throw new Error('Agent comparison did not complete: ' + JSON.stringify(state.comparison));
+  }
+  if (!q('#comparison-primary-result')?.textContent.includes('Repository health: **B')) {
+    throw new Error('Primary comparison result was not rendered');
+  }
+  if (!q('#comparison-secondary-result')?.textContent.includes('Synthetic Hermes Agent browser run')) {
+    throw new Error('Secondary comparison result was not rendered');
+  }
+  if (!q('#comparison-primary-receipt')?.textContent.includes('characters')) {
+    throw new Error('Primary standardized receipt was not rendered');
+  }
+  const comparisonId = state.comparison.comparisonId;
+  const comparisonPacketId = state.comparison.secondaryPacketId;
+  const comparisonsResponse = await fetch('/api/comparisons?repo=' + encodeURIComponent(repo));
+  const comparisonsPayload = await comparisonsResponse.json();
+  if (!comparisonsResponse.ok || comparisonsPayload.comparisons?.[0]?.comparison_id !== comparisonId) {
+    throw new Error('Saved comparison was not listed by the API');
+  }
+  if (comparisonsPayload.comparisons[0].result_text_included !== false) {
+    throw new Error('Saved comparison claimed to include answer text');
+  }
+  click('#comparison-cancel-button');
+  await waitFor(() => !q('#comparison-dialog')?.open, 'comparison dialog close');
+
   const hermesAdapter = state.data.runner_adapters.find((adapter) => adapter.id === 'hermes');
   if (!hermesAdapter?.available) throw new Error('Hermes fake adapter was not reported ready');
   const hermesReadyState = { ...hermesAdapter };
@@ -344,6 +385,9 @@ const journeyExpression = String.raw`
     runner_status: packet.runner_run.status,
     remote_execution: packet.runner_run.remote_execution,
     evidence_main: packet.attach_evidence,
+    comparison_id: comparisonId,
+    comparison_packet_id: comparisonPacketId,
+    comparison_status: 'complete',
     hermes_packet_id: hermesPacketId,
     hermes_status: hermesRun.status,
     hermes_remote_execution: hermesRun.remote_execution,
@@ -543,6 +587,39 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
     await evaluate(client, "new Promise((resolve) => { if (document.readyState === 'complete') resolve(true); else window.addEventListener('load', () => resolve(true), { once: true }); })");
 
     const result = await evaluate(client, journeyExpression);
+    await evaluate(client, `(async () => {
+      document.querySelector('#goal-dialog')?.close();
+      document.querySelector('#comparison-dialog')?.showModal();
+      renderComparisonDialog();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const comparisonPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-agent-comparison-desktop.jpg"),
+    );
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: true,
+    });
+    await evaluate(client, `(async () => {
+      document.querySelector('#comparison-dialog')?.scrollTo(0, 0);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const comparisonMobilePath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-agent-comparison-mobile.jpg"),
+    );
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await evaluate(client, "document.querySelector('#comparison-dialog')?.close(); true");
     const receiptPath = path.join(workspace, ".hamiltonian", "goals", result.maintenance_goal_id, "return.json");
     await writeFile(
       receiptPath,
@@ -694,7 +771,7 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.4.1");
+    ).replace("__HAMILTONIAN_VERSION__", "0.5.0");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -717,6 +794,8 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
       screenshots: {
         mission_home: homePath,
         health_check: checkPath,
+        agent_comparison: comparisonPath,
+        agent_comparison_mobile: comparisonMobilePath,
         goal_ready: readyPath,
         corrective_lineage: lineagePath,
         mobile: mobilePath,

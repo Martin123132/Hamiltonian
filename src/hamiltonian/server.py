@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .core import ensure_repo, is_git_repo
+from .comparisons import create_result_comparison, list_result_comparisons
 from .goals import (
     create_corrective_goal,
     create_goal_package,
@@ -95,6 +96,14 @@ class CockpitHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
+        if parsed.path == "/api/comparisons":
+            query = parse_qs(parsed.query)
+            try:
+                repo = self._requested_repo(query.get("repo", [str(self.repo)])[0])
+                self._write_json({"comparisons": list_result_comparisons(repo)})
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
         if parsed.path.startswith("/api/packets/") and parsed.path.endswith("/run"):
             query = parse_qs(parsed.query)
             packet_id = unquote(
@@ -128,6 +137,34 @@ class CockpitHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/comparisons":
+            try:
+                payload = self._read_json()
+                repo = self._requested_repo(str(payload.get("repo") or str(self.repo)))
+                primary_id = str(payload.get("primary_packet_id") or "")
+                secondary_id = str(payload.get("secondary_packet_id") or "")
+                comparison = create_result_comparison(repo, primary_id, secondary_id)
+                primary_packet = get_task_packet(repo, primary_id)
+                secondary_packet = get_task_packet(repo, secondary_id)
+                primary_run = get_packet_run(self.run_manager, repo, primary_packet)
+                secondary_run = get_packet_run(self.run_manager, repo, secondary_packet)
+                self._write_json(
+                    {
+                        "comparison": comparison,
+                        "results": {
+                            "primary": primary_run.get("last_message", ""),
+                            "secondary": secondary_run.get("last_message", ""),
+                        },
+                    },
+                    status=HTTPStatus.CREATED,
+                )
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
+            except FileNotFoundError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path.startswith("/api/goals/") and parsed.path.endswith("/review"):
             goal_id = unquote(
                 parsed.path.removeprefix("/api/goals/").removesuffix("/review")

@@ -20,6 +20,7 @@ from .core import is_git_repo, write_text
 
 RUNNER_CONTRACT_SCHEMA = "hamiltonian.runner-contract.v3"
 RUNNER_RUN_SCHEMA = "hamiltonian.runner-run.v1"
+RUNNER_RESULT_SCHEMA = "hamiltonian.result-receipt.v1"
 RUNNER_LIFECYCLE = ("prepare", "launch", "stream", "cancel", "finish", "report")
 RUNNER_LANES = {"codex", "openclaw", "hermes", "local"}
 ACTIVE_RUN_STATUSES = {"starting", "running", "cancelling"}
@@ -139,6 +140,7 @@ class _ActiveRun:
     output_path: Path
     final_message_path: Path
     report_path: Path
+    result_receipt_path: Path
     timeout_seconds: int
     started_monotonic: float
     reader_thread: threading.Thread | None = None
@@ -889,6 +891,7 @@ class LocalRunManager:
         output_path = run_dir / "runner-output.log"
         final_message_path = run_dir / "last-message.txt"
         report_path = run_dir / "runner-report.json"
+        result_receipt_path = run_dir / "result-receipt.json"
         command = adapter.build_command(request, run_dir)
         started_at = _utc_now()
         creationflags = 0
@@ -922,6 +925,7 @@ class LocalRunManager:
                 events_path=events_path,
                 final_message_path=final_message_path,
                 report_path=report_path,
+                result_receipt_path=result_receipt_path,
                 summary=f"Local {label} process could not be started.",
                 error="process-start-failed",
             )
@@ -954,6 +958,7 @@ class LocalRunManager:
             output_path=output_path,
             final_message_path=final_message_path,
             report_path=report_path,
+            result_receipt_path=result_receipt_path,
             timeout_seconds=timeout,
             started_monotonic=time.monotonic(),
         )
@@ -970,6 +975,7 @@ class LocalRunManager:
             events_path=events_path,
             final_message_path=final_message_path,
             report_path=report_path,
+            result_receipt_path=result_receipt_path,
             summary=running_handle.summary,
         )
         self._write_state(state_path, latest_path, state)
@@ -1118,6 +1124,7 @@ class LocalRunManager:
             events_path=active.events_path,
             final_message_path=active.final_message_path,
             report_path=active.report_path,
+            result_receipt_path=active.result_receipt_path,
             summary=summary,
         )
         state.update(
@@ -1131,6 +1138,30 @@ class LocalRunManager:
                 "output_truncated": active.output_truncated,
             }
         )
+        final_message = _read_tail(active.final_message_path, 4000).strip()
+        result_receipt = {
+            "schema": RUNNER_RESULT_SCHEMA,
+            "run_id": active.handle.run_id,
+            "packet_id": active.request.packet_id,
+            "adapter_id": active.plan.adapter_id,
+            "lane_id": active.request.lane_id,
+            "status": status,
+            "completed_at": finished_at,
+            "exit_code": returncode,
+            "duration_seconds": state["duration_seconds"],
+            "workspace_name": active.plan.workspace_name,
+            "task_digest": active.plan.task_digest,
+            "result_available": bool(final_message),
+            "result_digest": sha256(final_message.encode("utf-8")).hexdigest(),
+            "result_length": len(final_message),
+            "result_included": False,
+            "evidence_requested": active.request.attach_evidence,
+            "local_execution": True,
+            "remote_execution": False,
+        }
+        write_text(active.result_receipt_path, json.dumps(result_receipt, indent=2))
+        state["result_receipt_path"] = str(active.result_receipt_path)
+        state["result_receipt"] = result_receipt
         report_payload = {
             **asdict(report),
             "exit_code": returncode,
@@ -1179,6 +1210,7 @@ class LocalRunManager:
         events_path: Path,
         final_message_path: Path,
         report_path: Path,
+        result_receipt_path: Path,
         summary: str,
         error: str | None = None,
     ) -> dict[str, Any]:
@@ -1210,6 +1242,7 @@ class LocalRunManager:
             "events_path": str(events_path),
             "final_message_path": str(final_message_path),
             "report_path": str(report_path),
+            "result_receipt_path": str(result_receipt_path),
             "summary": summary,
             "error": error,
         }
