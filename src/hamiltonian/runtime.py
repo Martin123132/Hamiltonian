@@ -8,6 +8,7 @@ from typing import Any
 from .core import ensure_repo, is_git_repo, run_capture
 from .integrations import IntegrationStatus, detect_integrations
 from .packets import build_lane_contracts, build_route_recommendations, list_task_packets
+from .runners import probe_codex_command, probe_hermes_command
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,19 @@ class RuntimeGate:
 
 
 @dataclass(frozen=True)
+class RunnerAdapterStatus:
+    id: str
+    name: str
+    available: bool
+    detail: str
+    mode: str
+    safety: str
+    setup_guidance: str
+    local_execution: bool
+    remote_execution: bool
+
+
+@dataclass(frozen=True)
 class RuntimeState:
     generated_at: str
     repo: str
@@ -36,6 +50,7 @@ class RuntimeState:
     git_available: bool
     git_status: str
     agents: list[AgentProfile]
+    runner_adapters: list[RunnerAdapterStatus]
     gates: list[RuntimeGate]
     integrations: list[IntegrationStatus]
     lane_contracts: list[dict[str, Any]]
@@ -99,6 +114,43 @@ def build_agents(
             role="shell and scripts",
             status="ready",
             notes="Runs commands directly when an agent is unnecessary.",
+        ),
+    ]
+
+
+def build_runner_adapters(repo: Path, git_available: bool) -> list[RunnerAdapterStatus]:
+    codex = probe_codex_command(repo)
+    hermes = probe_hermes_command(repo)
+    return [
+        RunnerAdapterStatus(
+            id="codex",
+            name="Codex",
+            available=bool(git_available and codex.available),
+            detail=codex.detail if git_available else "A Git worktree is required.",
+            mode="local-codex",
+            safety="Workspace-write sandbox with a supervised timeout.",
+            setup_guidance=(
+                "Ready to use the existing Codex CLI session."
+                if git_available and codex.available
+                else "Set up the Codex app or CLI outside Hamiltonian, then reopen this workspace."
+            ),
+            local_execution=True,
+            remote_execution=False,
+        ),
+        RunnerAdapterStatus(
+            id="hermes",
+            name="Hermes Agent",
+            available=bool(git_available and hermes.available),
+            detail=hermes.detail if git_available else "A Git worktree is required.",
+            mode="local-hermes-one-shot",
+            safety="Hermes safe mode, checkpoints, bounded turns, and a supervised timeout.",
+            setup_guidance=(
+                "Ready to use the existing Hermes provider configuration."
+                if git_available and hermes.available
+                else "Install and configure Hermes outside Hamiltonian, then reopen this workspace."
+            ),
+            local_execution=True,
+            remote_execution=False,
         ),
     ]
 
@@ -185,6 +237,7 @@ def build_runtime_state(repo_path: Path) -> RuntimeState:
         git_available=git_available,
         git_status=run_capture(("git", "status", "--short"), repo) if git_available else "",
         agents=build_agents(git_available, integrations),
+        runner_adapters=build_runner_adapters(repo, git_available),
         gates=build_gates(integrations),
         integrations=integrations,
         lane_contracts=build_lane_contracts(git_available, integrations),

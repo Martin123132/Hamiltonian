@@ -75,8 +75,12 @@ windows.
   </tr>
 </table>
 
-## Version 0.4.0
+## Version 0.4.1
 
+- Mission Home `Auto / Codex / Hermes` worker selector with live local readiness.
+- Task-aware Auto routing that chooses only callable Codex or Hermes adapters.
+- Plain setup guidance when an adapter is unavailable, without installing tools or handling credentials.
+- Lane-aware one-button progress, cancellation, failure, and result states on desktop and mobile.
 - First callable non-Codex lane through the official Hermes Agent one-shot CLI.
 - Hermes safe mode, checkpoints, bounded turns, explicit launch, timeout, cancellation, and local reports.
 - Safe unavailable fallback when Hermes is not installed or its configured command cannot be probed.
@@ -172,9 +176,9 @@ The build also writes:
 D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.0.zip
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.0.release.json
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.0.sha256
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.1.zip
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.1.release.json
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.1.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
@@ -287,6 +291,13 @@ execution off. Hamiltonian supervises the local process, supports cancellation,
 and stores capped, sanitized lifecycle events plus the final response. It never
 uses the Codex danger-full-access or sandbox-bypass flags.
 
+Mission Home exposes `Auto`, `Codex`, and `Hermes` before the run starts. Auto
+uses task-aware route advice but selects only a callable adapter. Each lane
+shows `Ready` or `Unavailable` in words, and unavailable lanes explain what the
+operator must configure outside Hamiltonian. Choosing a worker never installs
+software, edits credentials, or starts a process; execution still requires the
+main Run action.
+
 The Hermes lane can launch the official scripted one-shot boundary only after
 the same explicit operator action. Hamiltonian invokes `hermes` with safe mode,
 tool source, a 24-turn cap, checkpoints, and `-z`, then supervises the process
@@ -357,8 +368,9 @@ node scripts\cockpit_browser_smoke.mjs
 
 It drives the one-button Home flow through successful completion and
 cancellation, checks that only four primary navigation choices are visible, and
-verifies optional recorder evidence plus a Hermes one-shot packet in a real
-local Edge session. The smoke journey supplies deterministic local fakes for
+verifies unavailable guidance, Auto/Codex/Hermes selection, optional recorder
+evidence, and a Hermes one-shot packet through Mission Home in a real local
+Edge session. The smoke journey supplies deterministic local fakes for
 the Codex and Hermes commands, so it uses no model credits or credentials. QA
 packets are removed after the run. The
 sanitized Mission Home, completed check, goal review, corrective lineage,

@@ -83,6 +83,12 @@ Evidence can enrich a packet, but evidence is not the product boundary.
 Packet detail views should render from the local task packet store. They should
 not become arbitrary file browsers or expose private source content.
 
+Mission Home should make the common path understandable without opening manual
+packet controls. It may recommend among callable local adapters, show explicit
+availability and setup guidance, and let the operator override the worker. It
+must not install agent software, configure provider credentials, or hide which
+lane will receive the packet.
+
 The packet index is a local manifest/cache for recent packet summaries. It is
 not a remote telemetry feed and should be rebuilt from packet files if missing
 or invalid.
