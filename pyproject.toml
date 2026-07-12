@@ -28,7 +28,7 @@ License = "https://github.com/Martin123132/Hamiltonian/blob/master/LICENSE"
 [project.optional-dependencies]
 desktop = ["pywebview==6.2.1"]
 build = ["pyinstaller==6.21.0"]
-test = ["pytest==9.0.3"]
+test = ["pytest==9.1.1"]
 
 [project.scripts]
 hamiltonian = "hamiltonian.cli:main"
