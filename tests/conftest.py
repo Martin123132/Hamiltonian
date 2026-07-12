@@ -55,3 +55,33 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 120, "cached_input_tok
         encoding="utf-8",
     )
     return (sys.executable, str(script))
+
+
+@pytest.fixture
+def fake_hermes_command(tmp_path: Path) -> tuple[str, ...]:
+    script = tmp_path / "fake_hermes.py"
+    script.write_text(
+        """from __future__ import annotations
+import sys
+import time
+
+if "--version" in sys.argv:
+    print("Hermes Agent 9.9.9-test")
+    raise SystemExit(0)
+
+if "-z" not in sys.argv:
+    raise SystemExit(2)
+
+prompt = sys.argv[-1]
+if "WAIT_FOR_CANCEL" in prompt:
+    time.sleep(30)
+if "WAIT_FOR_TIMEOUT" in prompt:
+    time.sleep(5)
+if "FAIL_RUN" in prompt:
+    raise SystemExit(3)
+
+print("Synthetic Hermes Agent run completed locally.", flush=True)
+""",
+        encoding="utf-8",
+    )
+    return (sys.executable, str(script))

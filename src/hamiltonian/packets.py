@@ -33,9 +33,9 @@ LANE_CATALOG: dict[str, dict[str, str]] = {
         "summary": "External agent lane selected through an adapter boundary; no remote execution occurs in this prototype.",
     },
     "hermes": {
-        "name": "Hermes adapter",
-        "kind": "external-agent-adapter",
-        "summary": "External agent lane selected through an adapter boundary; no remote execution occurs in this prototype.",
+        "name": "Hermes Agent",
+        "kind": "local-agent-adapter",
+        "summary": "Callable local one-shot adapter when Hermes is installed; remote command backends stay off.",
     },
     "local": {
         "name": "Local runner",
@@ -59,10 +59,10 @@ LANE_CONTRACTS: dict[str, dict[str, Any]] = {
         "evidence_policy": "Represent evidence locally until a real adapter is wired.",
     },
     "hermes": {
-        "boundary": "external adapter lane",
-        "best_for": ["structured handoff", "agent comparison", "adapter proving"],
-        "avoid_for": ["direct execution", "private repo scraping", "credentialed work"],
-        "evidence_policy": "Represent evidence locally until a real adapter is wired.",
+        "boundary": "local one-shot agent adapter",
+        "best_for": ["structured handoff", "agent comparison", "bounded local agent work"],
+        "avoid_for": ["remote gateways", "delivery services", "credential setup"],
+        "evidence_policy": "Attach AgentLedger only when requested.",
     },
     "local": {
         "boundary": "local command lane",
@@ -281,9 +281,12 @@ def build_lane_contracts(
     for lane_id, lane in LANE_CATALOG.items():
         contract = LANE_CONTRACTS[lane_id]
         external = lane["kind"] == "external-agent-adapter"
+        hermes_ready = lane_id == "hermes" and _available(by_name, "Hermes Agent")
         status = "adapter-boundary" if external else "ready"
         if lane_id == "codex" and not git_available:
             status = "limited"
+        elif lane_id == "hermes" and not hermes_ready:
+            status = "adapter-unavailable"
         contracts.append(
             {
                 "id": lane_id,
@@ -296,7 +299,7 @@ def build_lane_contracts(
                 "required_gates": ["memory", "intent", "cost"],
                 "remote_execution": False,
                 "evidence_policy": contract["evidence_policy"],
-                "adapter_ready": not external,
+                "adapter_ready": not external and (lane_id != "hermes" or hermes_ready),
                 "memory_available": _available(by_name, "RepoMori"),
             }
         )
@@ -356,6 +359,11 @@ def build_route_recommendations(
             if handoff_task:
                 score += 8
                 reasons.append("task includes handoff, review, or structured comparison language")
+            if _available(_integration_by_name(integrations), "Hermes Agent"):
+                score += 8
+                reasons.append("callable Hermes Agent CLI is available locally")
+            else:
+                warnings.append("Hermes Agent CLI is unavailable; launch remains disabled.")
         elif lane_id == "openclaw":
             if "openclaw" in task.lower() or "open claw" in task.lower():
                 score += 8
@@ -580,21 +588,21 @@ def _execution_boundary(
     if stage == "handoff" and run_status == "succeeded":
         return ExecutionBoundary(
             status="completed",
-            mode="local-codex",
+            mode=f"local-{lane.id}",
             approval_required=False,
             local_execution=True,
             remote_execution=False,
-            summary="The bounded local Codex run completed before handoff.",
+            summary=f"The bounded local {lane.name} run completed before handoff.",
             next_action="Review the local runner report and prepare the operator handoff.",
         )
     if stage == "handoff" and run_status in {"failed", "timed-out", "cancelled", "interrupted"}:
         return ExecutionBoundary(
             status="run-failed",
-            mode="local-codex",
+            mode=f"local-{lane.id}",
             approval_required=True,
             local_execution=True,
             remote_execution=False,
-            summary=f"The bounded local Codex run ended as {run_status}.",
+            summary=f"The bounded local {lane.name} run ended as {run_status}.",
             next_action="Review or retry the local run before treating the work as complete.",
         )
 

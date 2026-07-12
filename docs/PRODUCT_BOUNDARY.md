@@ -51,6 +51,14 @@ only sanitized local metadata: counts, extension mix, git availability, and
 privacy flags. It does not read file contents, store private path names, call
 remote services, or execute RepoMori.
 
+Hermes Agent is the first callable non-Codex lane. Hamiltonian uses Hermes's
+official scripted one-shot CLI with safe mode, checkpoints, a bounded turn
+count, and an explicit operator launch. Hamiltonian does not install Hermes,
+configure credentials, enable `--yolo`, start gateway or delivery services, or
+enable remote terminal backends. Hermes safe mode is an application boundary,
+not an OS sandbox, and model access still comes from the operator's existing
+Hermes provider configuration.
+
 ## Product Contract
 
 Hamiltonian owns the operator cockpit and runtime boundary above agents. Its
@@ -113,14 +121,14 @@ Every adapter lane should follow the same local-first contract:
 1. Detect whether the tool is available.
 2. Return a structured status when unavailable.
 3. Use sanitized fallback data when useful.
-4. Avoid remote calls unless the operator explicitly configures that adapter.
+4. Do not enable remote command execution; model-provider access may use the operator's existing agent configuration.
 5. Avoid reading or storing private file contents unless a later mode asks for
    it clearly.
 6. Keep credentials out of packets, logs, docs, screenshots, and demos.
 
-The first proof adapter is RepoMori memory. The next adapters should prove the
-same boundary for command safety, cost posture, compression, release gates, and
-agent lanes.
+RepoMori is the first memory adapter and Hermes is the first callable agent
+adapter. The next adapters should prove the same boundary for command safety,
+cost posture, compression, release gates, and additional agent lanes.
 
 ## Package Shape
 
@@ -152,7 +160,7 @@ Local cockpit with agent lanes, runtime gates, lifecycle state, and tool mesh.
 ## First Integration Order
 
 1. Local cockpit state API.
-2. Agent lanes for Codex, local shell, OpenClaw adapter, Hermes adapter.
+2. Agent lanes for Codex, local shell, OpenClaw dry-run adapter, and callable Hermes adapter.
 3. RepoMori memory adapter boundary with sanitized fallback snapshot.
 4. Jester pre-run command gate.
 5. Tokometer usage snapshot.
