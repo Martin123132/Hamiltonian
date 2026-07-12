@@ -1,48 +1,109 @@
 # Hamiltonian
 
-Flight software for agentic systems.
+**Run any agent. Trust none. Keep evidence when it matters.**
 
-Hamiltonian is the operator layer above AI agents. It gives the user a local
-cockpit for assigning work, choosing an agent lane, checking memory/policy/cost
-gates, and attaching evidence only when a run needs it.
+Hamiltonian is a local-first operator cockpit for agent work. Describe the
+result you want, run a bounded local check, hand the resulting goal to the
+correct Codex project, and bring the completion receipt back for independent
+review.
 
-The name points in two directions:
+![Hamiltonian Mission Home](docs/images/mission-home-desktop.jpg)
 
-- Margaret Hamilton: flight software, Apollo, correctness under pressure.
-- William Rowan Hamilton: state, motion, trajectories, energy, and action.
+The normal path stays deliberately simple:
 
-That is the product: agent actions with state, cost, risk, memory, and proof.
-AgentLedger is one instrument in that cockpit, not the cockpit itself.
+1. Write the job in plain language.
+2. Press **Run locally**.
+3. Turn a useful result into a Maintenance or Expansion goal.
+4. Let Hamiltonian detect the return receipt and review the completed work.
+
+All application state stays in the selected repository or D-drive data
+directory. The cockpit binds only to `127.0.0.1`, remote command execution is
+off, and evidence remains optional unless the operator selects it.
+
+## How It Works
+
+### 1. Run a bounded local check
+
+Hamiltonian saves a task packet, evaluates its local safety, memory, and cost
+gates, then launches the selected local Codex lane only after the operator
+presses **Run locally**.
+
+![Completed Hamiltonian health check](docs/images/health-check-desktop.jpg)
+
+### 2. Hand production work to the correct Codex project
+
+**Get Codex goal** creates one bounded handoff with a workspace lock, baseline
+commit, acceptance criteria, verification requirements, and a local return
+receipt path.
+
+| Goal | Use it for |
+| --- | --- |
+| **Maintenance** | Resolve confirmed findings and raise the current health result one defensible step. |
+| **Expansion** | Add or extend one clearly bounded capability while preserving the current baseline. |
+
+Hamiltonian copies the goal and can open the repository in Codex, but the user
+still chooses the destination project task. It never injects work into another
+task automatically.
+
+### 3. Review the return receipt
+
+When Codex writes `return.json`, Goal history notices it automatically and
+shows **Review now**. Hamiltonian then runs a local, read-only check against the
+saved baseline and acceptance criteria.
+
+![Goal ready for review](docs/images/goal-ready-desktop.jpg)
+
+### 4. Correct incomplete work without losing the thread
+
+An incomplete review produces a focused corrective goal. Parent, lineage root,
+correction number, receipt, review, and grade movement remain visible in one
+history.
+
+![Corrective goal lineage](docs/images/corrective-lineage-desktop.jpg)
+
+## Desktop Experience
+
+The native Windows shell opens on a workspace launcher, remembers recent local
+repositories, and highlights goals that are ready for review. The same core
+workflow adapts to a narrow mobile-sized viewport for remote desktop or compact
+windows.
+
+<table>
+  <tr>
+    <td width="66%"><img alt="Hamiltonian desktop workspace launcher" src="docs/images/desktop-launcher.jpg"></td>
+    <td width="34%"><img alt="Hamiltonian compact Mission Home" src="docs/images/mission-home-mobile.jpg"></td>
+  </tr>
+</table>
+
+## Version 0.3.0
+
+- Native Windows WebView2 desktop shell and D-drive-first storage.
+- One-button local Codex workflow with cancellation and bounded runner state.
+- Maintenance and Expansion goal handoffs.
+- Automatic receipt discovery and local review recording.
+- Corrective goals with parent and grade lineage.
+- Goal status in Mission Home and the desktop launcher.
+- Optional AgentLedger evidence boundary with no remote execution.
 
 ## Product Boundary
 
-Hamiltonian is separate from AgentLedger.
+Hamiltonian is the orchestration and review layer. Its core unit is the task
+packet: intent, selected lane, local gate results, execution state, handoff, and
+optional evidence references.
 
-AgentLedger remains the clean flight recorder: capture what happened, keep
-evidence, produce bundles. Hamiltonian is the policy/orchestration layer for
-users who want more on top: gates, budget posture, repo memory, compression
-evidence, and release checks.
+AgentLedger remains a separate flight recorder for capturing what happened and
+producing evidence bundles. Hamiltonian only represents AgentLedger when the
+operator selects evidence or recorder mode.
 
-Hamiltonian can call AgentLedger when the user wants flight-recorder evidence,
-but it does not require AgentLedger as the product home.
+Codex, OpenClaw, Hermes, and the local runner are adapter lanes. Route advice is
+metadata, not execution authority. Prototype adapters stay local, degrade
+safely when unavailable, and do not scrape private repositories or enable
+remote commands.
 
-Hamiltonian's core unit is the task packet: task intent, selected lane, local
-gate results, handoff state, and optional evidence references. If a feature
-mainly records a run, it belongs behind the AgentLedger evidence boundary. If it
-routes, gates, budgets, verifies, or hands off work across agents, it belongs in
-Hamiltonian.
+The name nods to Margaret Hamilton's correctness-under-pressure flight software
+and William Rowan Hamilton's language of state, trajectories, and action.
 
-Hamiltonian now keeps local lane contracts and route recommendations. The
-operator can still select Codex, OpenClaw, Hermes, or the local runner, but the
-packet records what Hamiltonian recommended, why, and whether the selected lane
-is an override. Route advice is metadata only; it does not authorize remote
-execution.
-
-Hamiltonian is not a remote execution service and not a repo scraper. Prototype
-adapters stay local, degrade safely when missing, and write sanitized metadata
-unless a later operator mode explicitly asks for more.
-
-## Run
+## Quick Start
 
 ```powershell
 python -m pip install -e .
@@ -270,8 +331,10 @@ It drives the one-button Home flow through successful completion and
 cancellation, checks that only four primary navigation choices are visible, and
 verifies optional recorder evidence in a real local Edge session. The smoke
 journey supplies a deterministic local fake for the Codex command, so it uses no
-model credits or credentials. QA packets are removed after the run; desktop and
-mobile screenshots are written under `D:\Codex\Temp\Hamiltonian` by default.
+model credits or credentials. QA packets are removed after the run. The
+sanitized Mission Home, completed check, goal review, corrective lineage,
+launcher, and mobile captures are written under
+`D:\Codex\Temp\Hamiltonian` by default.
 
 The lower-level `run` command still writes:
 
