@@ -6,14 +6,18 @@ from pathlib import Path
 import subprocess
 import time
 
+from hamiltonian.integrations import _cached_detect_integrations, detect_integrations
 from hamiltonian.runners import (
     RUNNER_CONTRACT_SCHEMA,
     RUNNER_LIFECYCLE,
     CodexLocalRunnerAdapter,
+    HermesLocalRunnerAdapter,
     LocalRunManager,
     LocalDryRunRunnerAdapter,
     RunnerRequest,
     _configured_codex_command,
+    _configured_hermes_command,
+    probe_hermes_command,
     read_latest_runner_state,
     runner_adapter_for_lane,
 )
@@ -192,6 +196,140 @@ def test_codex_adapter_builds_official_bounded_exec_command(
     assert "--dangerously-bypass-approvals-and-sandbox" not in command
     assert "danger-full-access" not in command
     assert command[-1] == request.task
+
+
+def test_hermes_discovery_and_probe_support_safe_local_override(
+    tmp_path: Path,
+    fake_hermes_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HAMILTONIAN_HERMES_COMMAND", json.dumps(list(fake_hermes_command)))
+
+    assert _configured_hermes_command() == fake_hermes_command
+    probe = probe_hermes_command(tmp_path)
+    assert probe.available is True
+    assert probe.command_prefix == fake_hermes_command
+    assert "Hermes Agent 9.9.9-test" in probe.detail
+
+    unavailable = probe_hermes_command(tmp_path, (str(tmp_path / "missing-hermes"),))
+    assert unavailable.available is False
+    assert "probe failed" in unavailable.detail.lower()
+
+
+def test_hermes_integration_status_requires_successful_version_probe(
+    tmp_path: Path,
+    fake_hermes_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    _cached_detect_integrations.cache_clear()
+    monkeypatch.delenv("HAMILTONIAN_HERMES_COMMAND", raising=False)
+    monkeypatch.setattr(
+        "hamiltonian.integrations.shutil.which",
+        lambda name: fake_hermes_command[1] if name == "hermes" else None,
+    )
+    monkeypatch.setattr(
+        "hamiltonian.integrations._probe",
+        lambda command, cwd, include_status=False: ("Hermes probe failed", False)
+        if include_status
+        else "missing",
+    )
+
+    status = next(item for item in detect_integrations(tmp_path) if item.name == "Hermes Agent")
+
+    assert status.available is False
+    assert status.detail == "Hermes probe failed"
+    _cached_detect_integrations.cache_clear()
+
+
+def test_hermes_adapter_builds_official_safe_one_shot_command(
+    tmp_path: Path,
+    fake_hermes_command: tuple[str, ...],
+) -> None:
+    init_git_repo(tmp_path)
+    packet_dir = tmp_path / ".hamiltonian" / "tasks" / "packet-hermes"
+    request = RunnerRequest(
+        packet_id="packet-hermes",
+        lane_id="hermes",
+        repo=tmp_path,
+        task="Review the bounded local change.",
+        gate_status="execution-ready",
+        blocked_gate_ids=(),
+        attach_evidence=False,
+    )
+    adapter = HermesLocalRunnerAdapter(command_prefix=fake_hermes_command)
+
+    plan = adapter.prepare(request, packet_dir)
+    command = adapter.build_command(request, packet_dir / "runner" / "runs" / "preview")
+
+    assert plan.adapter_available is True
+    assert plan.launch_supported is True
+    assert plan.mode == "local-hermes-one-shot"
+    assert plan.sandbox_policy == "hermes-safe-mode-checkpoints"
+    assert command[: len(fake_hermes_command)] == list(fake_hermes_command)
+    assert "--safe-mode" in command
+    assert command[command.index("--source") + 1] == "tool"
+    assert command[command.index("--max-turns") + 1] == "24"
+    assert "--checkpoints" in command
+    assert "-z" in command
+    assert command[-1].endswith(request.task)
+    assert str(tmp_path.resolve()) not in command[-1]
+    assert "--yolo" not in command
+    assert "gateway" not in command[:-1]
+    assert "deliver" not in command[:-1]
+
+
+def test_hermes_unavailable_falls_back_to_non_launching_plan(tmp_path: Path) -> None:
+    init_git_repo(tmp_path)
+    request = RunnerRequest(
+        packet_id="packet-hermes-missing",
+        lane_id="hermes",
+        repo=tmp_path,
+        task="Review the local packet.",
+        gate_status="execution-ready",
+        blocked_gate_ids=(),
+        attach_evidence=False,
+    )
+    adapter = HermesLocalRunnerAdapter(command_prefix=(str(tmp_path / "missing-hermes"),))
+
+    plan = adapter.prepare(request, tmp_path / ".hamiltonian" / "tasks" / request.packet_id)
+
+    assert plan.status == "prepared"
+    assert plan.adapter_available is False
+    assert plan.launch_supported is False
+    assert plan.local_execution is False
+    assert plan.remote_execution is False
+
+
+def test_local_run_manager_captures_hermes_one_shot_response(
+    tmp_path: Path,
+    fake_hermes_command: tuple[str, ...],
+) -> None:
+    init_git_repo(tmp_path)
+    packet_dir = tmp_path / ".hamiltonian" / "tasks" / "packet-hermes-success"
+    request = RunnerRequest(
+        packet_id="packet-hermes-success",
+        lane_id="hermes",
+        repo=tmp_path,
+        task="Complete the synthetic Hermes run.",
+        gate_status="execution-ready",
+        blocked_gate_ids=(),
+        attach_evidence=False,
+    )
+    adapter = HermesLocalRunnerAdapter(command_prefix=fake_hermes_command)
+    plan = adapter.prepare(request, packet_dir)
+    manager = LocalRunManager()
+
+    manager.start(adapter, request, plan, packet_dir, timeout_seconds=10)
+    completed = wait_for_terminal_run(manager, packet_dir)
+
+    assert completed["status"] == "succeeded"
+    assert completed["adapter_id"] == "hermes-local"
+    assert completed["lane_id"] == "hermes"
+    assert completed["last_message"] == "Synthetic Hermes Agent run completed locally."
+    assert completed["local_execution"] is True
+    assert completed["remote_execution"] is False
+    assert Path(completed["output_path"]).name == "runner-output.log"
+    assert any(event["type"] == "runner.succeeded" for event in completed["events"])
 
 
 def test_local_run_manager_streams_sanitized_events_and_report(

@@ -75,8 +75,12 @@ windows.
   </tr>
 </table>
 
-## Version 0.3.1
+## Version 0.4.0
 
+- First callable non-Codex lane through the official Hermes Agent one-shot CLI.
+- Hermes safe mode, checkpoints, bounded turns, explicit launch, timeout, cancellation, and local reports.
+- Safe unavailable fallback when Hermes is not installed or its configured command cannot be probed.
+- Lane-aware packet controls and a Windows Edge smoke journey covering Codex and Hermes.
 - Read-only GitHub Actions checks on Python 3.10 and 3.13.
 - Deterministic Windows browser-smoke verification with screenshot artifacts.
 - Reproducible Windows portable ZIP, release manifest, and SHA-256 checksum.
@@ -168,9 +172,9 @@ The build also writes:
 D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
 D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.3.1.zip
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.3.1.release.json
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.3.1.sha256
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.0.zip
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.0.release.json
+D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.4.0.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
@@ -256,9 +260,10 @@ The cockpit now persists local task packets under:
     runner-plan.json
     latest-run.json
     runs/<run-id>/
-      run-state.json
+      state.json
       events.jsonl
-      final-message.txt
+      runner-output.log
+      last-message.txt
       runner-report.json
   evidence/
     agentledger-placeholder.json
@@ -282,11 +287,20 @@ execution off. Hamiltonian supervises the local process, supports cancellation,
 and stores capped, sanitized lifecycle events plus the final response. It never
 uses the Codex danger-full-access or sandbox-bypass flags.
 
-If the Codex CLI is not callable, the plan remains visible but launch stays
-disabled with the probe failure shown in the cockpit. Other lanes still stop at
-the adapter contract. Runner-plan artifacts contain a task digest and workspace
-name, not task text or the workspace path. Blocked packets do not write a runner
-artifact.
+The Hermes lane can launch the official scripted one-shot boundary only after
+the same explicit operator action. Hamiltonian invokes `hermes` with safe mode,
+tool source, a 24-turn cap, checkpoints, and `-z`, then supervises the process
+from the selected Git workspace. It does not use `--yolo`, start a gateway or
+delivery service, or enable SSH, Docker, or another remote command backend.
+Hermes safe mode and checkpoints are application controls, not an OS sandbox.
+Hermes may still use the model provider already configured by the operator.
+[Hermes CLI reference](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/cli-commands.md)
+
+If Codex or Hermes is not callable, its plan remains visible but launch stays
+disabled with the probe failure shown in the cockpit. OpenClaw and the direct
+local lane still stop at the dry-run adapter contract. Runner-plan artifacts
+contain a task digest and workspace name, not task text or the workspace path.
+Blocked packets do not write a runner artifact.
 Handoff-stage packets add a compact operator brief with lane, route, gate,
 approval, and evidence state in one place.
 
@@ -298,7 +312,7 @@ The packet stages are:
 
 - `draft`: save the operator task and selected agent lane.
 - `gate`: check memory through the RepoMori adapter boundary, then run local intent and cost gates.
-- `execute`: prepare an explicit approval boundary and, for a ready Codex lane, optionally launch one bounded local CLI run.
+- `execute`: prepare an explicit approval boundary and, for a ready Codex or Hermes lane, optionally launch one bounded local CLI run.
 - `handoff`: prepare a local operator handoff brief after gates and any launched run are complete.
 - `record`: run the same gates and attach a local AgentLedger evidence placeholder.
 
@@ -323,10 +337,11 @@ Packet detail can export a sanitized handoff markdown file to:
 The export omits repo paths, packet storage paths, artifact paths, file
 contents, credentials, and remote URLs.
 
-No remote command executor is used in this prototype slice. A Codex launch is a
-local, supervised CLI process; model access remains the responsibility of the
-operator's existing Codex CLI session. Missing RepoMori, Jester, Tokometer, and
-AgentLedger integrations degrade to explicit local fallback gate results.
+No remote command executor is used in this slice. Codex and Hermes launches are
+locally supervised CLI processes; model access remains the responsibility of
+the operator's existing CLI configuration. Missing Hermes, RepoMori, Jester,
+Tokometer, and AgentLedger integrations degrade to explicit local fallback
+states.
 
 The RepoMori adapter is privacy-preserving in this slice: it writes sanitized
 metadata only, with no file contents, private path names, credentials, URLs, or
@@ -342,9 +357,10 @@ node scripts\cockpit_browser_smoke.mjs
 
 It drives the one-button Home flow through successful completion and
 cancellation, checks that only four primary navigation choices are visible, and
-verifies optional recorder evidence in a real local Edge session. The smoke
-journey supplies a deterministic local fake for the Codex command, so it uses no
-model credits or credentials. QA packets are removed after the run. The
+verifies optional recorder evidence plus a Hermes one-shot packet in a real
+local Edge session. The smoke journey supplies deterministic local fakes for
+the Codex and Hermes commands, so it uses no model credits or credentials. QA
+packets are removed after the run. The
 sanitized Mission Home, completed check, goal review, corrective lineage,
 launcher, and mobile captures are written under
 `D:\Codex\Temp\Hamiltonian` by default.
@@ -374,6 +390,7 @@ The prototype detects these tools if already installed:
 - Tokometer: local Codex token burn posture.
 - TokenSquash: measurable prompt/reply compression.
 - Sentinel Manifold: release-gate / behavior-regression proof layer.
+- Hermes Agent: optional local one-shot agent lane using existing provider configuration.
 
 Missing tools are reported as warnings, not failures. That lets the wrapper work
 today while the full product stack is assembled.
@@ -387,6 +404,7 @@ the agent:
 Run any agent. Trust none. Keep evidence.
 ```
 
-The first cockpit treats OpenClaw and Hermes as adapter lanes. The market is not
+The cockpit keeps OpenClaw behind a dry-run adapter and makes Hermes its first
+callable non-Codex lane. The market is not
 "which agent is coolest"; the market is who operators trust to route, gate,
 verify, and prove agent work across all of them.

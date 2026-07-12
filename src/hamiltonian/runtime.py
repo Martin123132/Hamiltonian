@@ -60,8 +60,13 @@ def _status_for(
     return "available as module"
 
 
-def build_agents(git_available: bool) -> list[AgentProfile]:
+def build_agents(
+    git_available: bool,
+    integrations: list[IntegrationStatus] | None = None,
+) -> list[AgentProfile]:
     repo_note = "workspace is git-aware" if git_available else "workspace is local-only"
+    by_name = _integration_map(integrations or [])
+    hermes_ready = bool(by_name.get("Hermes Agent") and by_name["Hermes Agent"].available)
     return [
         AgentProfile(
             id="codex",
@@ -79,10 +84,14 @@ def build_agents(git_available: bool) -> list[AgentProfile]:
         ),
         AgentProfile(
             id="hermes",
-            name="Hermes adapter",
-            role="external agent lane",
-            status="adapter planned",
-            notes="Useful only behind Hamiltonian gates and memory.",
+            name="Hermes Agent",
+            role="local one-shot agent lane",
+            status="ready" if hermes_ready and git_available else "adapter unavailable",
+            notes=(
+                "Callable through safe mode and checkpoints behind Hamiltonian gates."
+                if hermes_ready and git_available
+                else "Install or expose Hermes Agent locally to enable this lane."
+            ),
         ),
         AgentProfile(
             id="local",
@@ -154,7 +163,7 @@ def build_next_actions(integrations: list[IntegrationStatus]) -> list[str]:
     by_name = _integration_map(integrations)
     actions = [
         "Build the task lifecycle: draft, assign, gate, execute, verify, hand off.",
-        "Treat OpenClaw and Hermes as adapters behind Hamiltonian, not as competitors to clone.",
+        "Keep OpenClaw behind a dry-run boundary; Hermes is the first callable non-Codex adapter.",
     ]
     if not by_name.get("RepoMori") or not by_name["RepoMori"].available:
         actions.append("Wire RepoMori as the first memory pack so tasks start with repo context.")
@@ -175,7 +184,7 @@ def build_runtime_state(repo_path: Path) -> RuntimeState:
         repo_name=repo.name,
         git_available=git_available,
         git_status=run_capture(("git", "status", "--short"), repo) if git_available else "",
-        agents=build_agents(git_available),
+        agents=build_agents(git_available, integrations),
         gates=build_gates(integrations),
         integrations=integrations,
         lane_contracts=build_lane_contracts(git_available, integrations),

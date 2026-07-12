@@ -1,6 +1,7 @@
 from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
+import subprocess
 import threading
 from urllib.parse import urlencode
 from urllib.error import HTTPError
@@ -166,7 +167,7 @@ def test_gate_packet_blocks_risky_task_without_evidence(tmp_path: Path) -> None:
 
     assert packet.status == "blocked"
     assert packet.lane.id == "hermes"
-    assert packet.lane.execution == "adapter-boundary-only"
+    assert packet.lane.execution == "local-boundary-only"
     assert packet.lane.remote_execution is False
     assert packet.route.selected_lane_id == "hermes"
     assert packet.route.recommended_lane_id == "codex"
@@ -179,6 +180,34 @@ def test_gate_packet_blocks_risky_task_without_evidence(tmp_path: Path) -> None:
     assert gate(packet, "memory").mode.startswith("repomori-")
     assert gate(packet, "memory").artifact_path is not None
     assert gate(packet, "intent").status == "block"
+    assert gate(packet, "evidence").status == "skipped"
+    assert not (Path(packet.packet_dir) / "evidence").exists()
+
+
+def test_hermes_execute_packet_exposes_live_local_adapter_without_evidence(
+    tmp_path: Path,
+    fake_hermes_command: tuple[str, ...],
+    monkeypatch,
+) -> None:
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    monkeypatch.setenv("HAMILTONIAN_HERMES_COMMAND", json.dumps(list(fake_hermes_command)))
+
+    packet = create_task_packet(
+        repo_path=tmp_path,
+        task="Review this bounded local packet and summarize the result.",
+        agent_id="hermes",
+        stage="execute",
+        attach_evidence=False,
+    )
+
+    assert packet.agent_id == "hermes"
+    assert packet.agent_name == "Hermes Agent"
+    assert packet.lane.kind == "local-agent-adapter"
+    assert packet.lane.execution == "local-boundary-only"
+    assert packet.runner_plan.adapter_id == "hermes-local"
+    assert packet.runner_plan.mode == "local-hermes-one-shot"
+    assert packet.runner_plan.launch_supported is True
+    assert packet.runner_plan.remote_execution is False
     assert gate(packet, "evidence").status == "skipped"
     assert not (Path(packet.packet_dir) / "evidence").exists()
 

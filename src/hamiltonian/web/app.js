@@ -3001,7 +3001,7 @@ function readinessItemsForPacket(packet) {
       detail: ACTIVE_RUN_STATES.has(runnerRun.status)
         ? runnerRun.summary
         : runnerRun.status === "succeeded"
-          ? "The bounded local Codex run completed successfully."
+          ? `The bounded local ${packetRunnerLabel(packet)} run completed successfully.`
           : runnerPlan.status === "prepared"
             ? `${runnerPlan.adapter_id || "Local runner"} prepared; launch ${runnerPlan.launch_supported ? "available" : "disabled"}.`
             : executionBoundary.status || "No local or remote execution has been prepared.",
@@ -4217,14 +4217,13 @@ function packetCommandState(packet) {
   const runnerActive = ACTIVE_RUN_STATES.has(runnerRun.status);
   const runnerCanLaunch =
     packet.stage === "execute" &&
-    packet.agent_id === "codex" &&
     runnerPlan.launch_supported === true &&
     Number(packet.gate_run?.blocked || 0) === 0 &&
     Number(packet.gate_run?.warnings || 0) === 0;
   if (runnerActive) {
     return {
       title: "Local run in progress",
-      detail: runnerRun.summary || "Codex is running inside the bounded workspace.",
+      detail: runnerRun.summary || `${packetRunnerLabel(packet)} is running inside the bounded workspace.`,
       label: "Run active",
       disabled: true,
       run: null,
@@ -4233,7 +4232,7 @@ function packetCommandState(packet) {
   if (runnerCanLaunch && runnerRun.status !== "succeeded") {
     return {
       title: runnerRun.status && runnerRun.status !== "not-started" ? "Retry bounded run" : "Launch bounded run",
-      detail: "Start Codex locally with workspace-write, a timeout, and remote command execution off.",
+      detail: `Start ${packetRunnerLabel(packet)} locally with a timeout and remote command execution off.`,
       label: runnerRun.status && runnerRun.status !== "not-started" ? "Retry local run" : "Launch local run",
       disabled: false,
       run: () => launchSelectedRunner().catch((error) => setText("#runner-control-summary", error.message)),
@@ -4325,14 +4324,19 @@ function runnerRunState(packet) {
   };
 }
 
+function packetRunnerLabel(packet) {
+  if (packet?.agent_id === "hermes") return "Hermes Agent";
+  if (packet?.agent_id === "codex") return "Codex";
+  return packet?.agent_name || packet?.lane?.name || "Local runner";
+}
+
 function runnerLaunchReason(packet) {
   if (!packet?.packet_id) return "Select a packet first.";
   if (packet.stage !== "execute") return "Prepare this packet to execute stage first.";
-  if (packet.agent_id !== "codex") return "Only the Codex lane has a live local adapter.";
   if (Number(packet.gate_run?.blocked || 0) > 0) return "Blocked gates prevent launch.";
   if (Number(packet.gate_run?.warnings || 0) > 0) return "Clear gate warnings before launch.";
   if (!packet.runner_plan?.launch_supported) {
-    return packet.runner_plan?.adapter_detail || "The local Codex CLI adapter is unavailable.";
+    return packet.runner_plan?.adapter_detail || "The selected local adapter is unavailable.";
   }
   if (ACTIVE_RUN_STATES.has(packet.runner_run?.status)) return "A local run is already active.";
   return "";
@@ -4388,17 +4392,18 @@ function renderRunnerControl(packet) {
   const cancelButton = $("#runner-cancel-button");
   const timeoutInput = $("#runner-timeout-input");
   const finalMessage = $("#runner-final-message");
+  const runnerLabel = packetRunnerLabel(packet);
 
   control.dataset.runState = status;
   control.dataset.packetId = packet?.packet_id || "";
   setRunnerBadge(status);
   setText(
     "#runner-control-title",
-    active ? "Codex run active" : status === "succeeded" ? "Codex run complete" : plan.launch_supported ? "Codex adapter ready" : "Codex adapter waiting",
+    active ? `${runnerLabel} run active` : status === "succeeded" ? `${runnerLabel} run complete` : plan.launch_supported ? `${runnerLabel} adapter ready` : `${runnerLabel} adapter waiting`,
   );
   setText(
     "#runner-adapter-state",
-    plan.adapter_available ? `${plan.adapter_id || "codex-local"} ready` : plan.adapter_detail || "Unavailable",
+    plan.adapter_available ? `${plan.adapter_id || "local-adapter"} ready` : plan.adapter_detail || "Unavailable",
   );
   setText("#runner-sandbox-state", plan.sandbox_policy || "workspace-write");
   setText("#runner-boundary-state", run.remote_execution ? "External execution detected" : "Local process only");
@@ -4407,7 +4412,9 @@ function renderRunnerControl(packet) {
     "#runner-control-note",
     run.run_id
       ? `Run ${run.run_id}. ${Number(run.duration_seconds || 0).toFixed(1)}s. Remote command execution remains off.`
-      : "Local workspace process. Codex model access uses the existing CLI session; remote command execution remains off.",
+      : packet?.agent_id === "hermes"
+        ? "Local workspace process. Hermes uses its existing provider configuration; gateways and remote command backends remain off."
+        : "Local workspace process. Codex model access uses the existing CLI session; remote command execution remains off.",
   );
 
   if (launchButton) {
@@ -4477,7 +4484,7 @@ async function launchSelectedRunner() {
     return;
   }
   clearRunnerPoll();
-  setText("#runner-control-summary", "Starting the bounded local Codex process...");
+  setText("#runner-control-summary", `Starting the bounded local ${packetRunnerLabel(packet)} process...`);
   const params = _queryRepoParams();
   const response = await fetch(`/api/packets/${encodeURIComponent(packet.packet_id)}/run?${params.toString()}`, {
     method: "POST",

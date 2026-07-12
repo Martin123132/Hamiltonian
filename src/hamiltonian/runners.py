@@ -18,7 +18,7 @@ from uuid import uuid4
 from .core import is_git_repo, write_text
 
 
-RUNNER_CONTRACT_SCHEMA = "hamiltonian.runner-contract.v2"
+RUNNER_CONTRACT_SCHEMA = "hamiltonian.runner-contract.v3"
 RUNNER_RUN_SCHEMA = "hamiltonian.runner-run.v1"
 RUNNER_LIFECYCLE = ("prepare", "launch", "stream", "cancel", "finish", "report")
 RUNNER_LANES = {"codex", "openclaw", "hermes", "local"}
@@ -36,7 +36,18 @@ def _utc_now() -> str:
 
 
 def _adapter_id(lane_id: str) -> str:
-    return "codex-local" if lane_id == "codex" else f"{lane_id}-local-contract"
+    if lane_id in {"codex", "hermes"}:
+        return f"{lane_id}-local"
+    return f"{lane_id}-local-contract"
+
+
+def _runner_label(lane_id: str) -> str:
+    return {
+        "codex": "Codex",
+        "hermes": "Hermes Agent",
+        "openclaw": "OpenClaw",
+        "local": "Local runner",
+    }.get(lane_id, "Local runner")
 
 
 @dataclass(frozen=True)
@@ -168,6 +179,9 @@ class RunnerAdapter(ABC):
 
     def build_command(self, request: RunnerRequest, run_dir: Path) -> list[str]:
         raise ValueError(f"{self.adapter_id} does not support launch")
+
+    def persist_final_message(self, output_path: Path, final_message_path: Path) -> None:
+        """Persist a final response when an adapter emits it through stdout."""
 
 
 def runner_plan_state(
@@ -349,6 +363,26 @@ def _configured_codex_command() -> tuple[str, ...]:
     return (executable,) if executable else ()
 
 
+def _configured_hermes_command() -> tuple[str, ...]:
+    configured = os.environ.get("HAMILTONIAN_HERMES_COMMAND", "").strip()
+    if configured:
+        if configured.startswith("["):
+            try:
+                value = json.loads(configured)
+            except json.JSONDecodeError as exc:
+                raise ValueError("HAMILTONIAN_HERMES_COMMAND must be a command or JSON array") from exc
+            if not isinstance(value, list) or not value or not all(
+                isinstance(item, str) and item for item in value
+            ):
+                raise ValueError("HAMILTONIAN_HERMES_COMMAND JSON must be a non-empty string array")
+            return tuple(value)
+        if Path(configured).exists():
+            return (configured,)
+        return tuple(shlex.split(configured, posix=os.name != "nt"))
+    executable = shutil.which("hermes")
+    return (executable,) if executable else ()
+
+
 def probe_codex_command(
     repo: Path,
     command_prefix: tuple[str, ...] | None = None,
@@ -374,6 +408,34 @@ def probe_codex_command(
         return AdapterProbe(False, prefix, f"Codex CLI probe failed: {type(exc).__name__}.")
     output = (proc.stdout or proc.stderr or "").strip().splitlines()
     detail = output[0][:180] if output else f"Codex CLI exited {proc.returncode}."
+    return AdapterProbe(proc.returncode == 0, prefix, detail)
+
+
+def probe_hermes_command(
+    repo: Path,
+    command_prefix: tuple[str, ...] | None = None,
+) -> AdapterProbe:
+    try:
+        prefix = command_prefix if command_prefix is not None else _configured_hermes_command()
+    except ValueError as exc:
+        return AdapterProbe(False, (), str(exc))
+    if not prefix:
+        return AdapterProbe(False, (), "Hermes Agent CLI is not installed or not on PATH.")
+    try:
+        proc = subprocess.run(
+            [*prefix, "--version"],
+            cwd=str(repo.resolve()),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        )
+    except Exception as exc:
+        return AdapterProbe(False, prefix, f"Hermes Agent CLI probe failed: {type(exc).__name__}.")
+    output = (proc.stdout or proc.stderr or "").strip().splitlines()
+    detail = output[0][:180] if output else f"Hermes Agent CLI exited {proc.returncode}."
     return AdapterProbe(proc.returncode == 0, prefix, detail)
 
 
@@ -526,10 +588,159 @@ class CodexLocalRunnerAdapter(RunnerAdapter):
         ]
 
 
+class HermesLocalRunnerAdapter(RunnerAdapter):
+    """Builds an official one-shot Hermes CLI command for local supervision."""
+
+    lane_id = "hermes"
+    adapter_id = "hermes-local"
+
+    def __init__(self, command_prefix: tuple[str, ...] | None = None) -> None:
+        self.command_prefix = command_prefix
+        self._probe: AdapterProbe | None = None
+
+    def _probe_for(self, repo: Path) -> AdapterProbe:
+        self._probe = probe_hermes_command(repo, self.command_prefix)
+        return self._probe
+
+    def prepare(self, request: RunnerRequest, packet_dir: Path) -> RunnerPlan:
+        if request.lane_id != self.lane_id:
+            raise ValueError("runner request lane does not match adapter lane")
+        if request.blocked_gate_ids:
+            return runner_plan_state(
+                lane_id=self.lane_id,
+                status="blocked",
+                mode="local-hermes-one-shot",
+                summary="Hermes runner plan refused because readiness gates blocked the packet.",
+                next_action="Clear blocked gates before preparing a Hermes launch.",
+            )
+
+        probe = self._probe_for(request.repo)
+        git_ready = is_git_repo(request.repo)
+        available = probe.available and git_ready
+        detail = probe.detail if git_ready else "Hermes launch requires a Git worktree."
+        plan = RunnerPlan(
+            schema=RUNNER_CONTRACT_SCHEMA,
+            adapter_id=self.adapter_id,
+            lane_id=self.lane_id,
+            status="prepared",
+            mode="local-hermes-one-shot",
+            lifecycle=RUNNER_LIFECYCLE,
+            approval_required=True,
+            adapter_available=available,
+            adapter_detail=detail,
+            launch_supported=available,
+            sandbox_policy="hermes-safe-mode-checkpoints",
+            local_only=True,
+            local_execution=False,
+            remote_execution=False,
+            workspace_name=request.repo.resolve().name,
+            task_digest=sha256(request.task.encode("utf-8")).hexdigest(),
+            task_length=len(request.task),
+            artifact_path=None,
+            summary=(
+                "Hermes Agent CLI is ready for an explicit local one-shot launch."
+                if available
+                else "Hermes runner contract is prepared, but the local CLI boundary is unavailable."
+            ),
+            next_action=(
+                "Review the timeout and explicitly launch Hermes in safe mode with checkpoints."
+                if available
+                else "Install or expose a callable Hermes Agent CLI, then create a fresh execute packet."
+            ),
+        )
+        return _write_plan_artifact(plan, request, packet_dir)
+
+    def launch(self, plan: RunnerPlan) -> RunnerHandle:
+        if not plan.launch_supported or not plan.adapter_available:
+            return RunnerHandle(
+                run_id=f"hermes-unavailable-{uuid4().hex[:8]}",
+                adapter_id=self.adapter_id,
+                status="launch-disabled",
+                process_id=None,
+                local_execution=False,
+                remote_execution=False,
+                summary=plan.adapter_detail,
+            )
+        return RunnerHandle(
+            run_id=f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}",
+            adapter_id=self.adapter_id,
+            status="starting",
+            process_id=None,
+            local_execution=True,
+            remote_execution=False,
+            summary="Hermes launch was explicitly approved for local supervision.",
+        )
+
+    def stream(self, handle: RunnerHandle) -> tuple[RunnerEvent, ...]:
+        return (
+            RunnerEvent(
+                run_id=handle.run_id,
+                sequence=1,
+                status=handle.status,
+                message="Local Hermes Agent process entered the supervised runner boundary.",
+                local_only=True,
+            ),
+        )
+
+    def cancel(self, handle: RunnerHandle) -> RunnerHandle:
+        return RunnerHandle(
+            run_id=handle.run_id,
+            adapter_id=handle.adapter_id,
+            status="cancelling",
+            process_id=handle.process_id,
+            local_execution=handle.local_execution,
+            remote_execution=False,
+            summary="Cancellation requested for the local Hermes process tree.",
+        )
+
+    def finish(self, handle: RunnerHandle) -> RunnerReport:
+        return RunnerReport(
+            run_id=handle.run_id,
+            adapter_id=handle.adapter_id,
+            status=handle.status,
+            exit_code=None,
+            local_execution=handle.local_execution,
+            remote_execution=False,
+            summary=handle.summary,
+        )
+
+    def report(self, handle: RunnerHandle) -> RunnerReport:
+        return self.finish(handle)
+
+    def build_command(self, request: RunnerRequest, run_dir: Path) -> list[str]:
+        probe = self._probe_for(request.repo)
+        if not probe.available:
+            raise ValueError(probe.detail)
+        bounded_task = (
+            "Work only inside the current Git workspace. Do not access parent or sibling paths. "
+            "Do not start gateways, delivery services, remote terminals, SSH, or Docker backends. "
+            "Complete this bounded local task and return a concise final response:\n\n"
+            f"{request.task}"
+        )
+        return [
+            *probe.command_prefix,
+            "--safe-mode",
+            "--source",
+            "tool",
+            "--max-turns",
+            "24",
+            "--checkpoints",
+            "-z",
+            bounded_task,
+        ]
+
+    def persist_final_message(self, output_path: Path, final_message_path: Path) -> None:
+        message = _read_tail(output_path, 4000).strip()
+        if message:
+            write_text(final_message_path, message)
+
+
 def runner_adapter_for_lane(lane_id: str) -> RunnerAdapter:
     normalized = lane_id.lower().strip()
     if normalized == "codex":
         return CodexLocalRunnerAdapter()
+    if normalized == "hermes":
+        return HermesLocalRunnerAdapter()
     return LocalDryRunRunnerAdapter(normalized)
 
 
@@ -675,7 +886,7 @@ class LocalRunManager:
         state_path = run_dir / "state.json"
         latest_path = root / "latest-run.json"
         events_path = run_dir / "events.jsonl"
-        output_path = run_dir / "codex-output.jsonl"
+        output_path = run_dir / "runner-output.log"
         final_message_path = run_dir / "last-message.txt"
         report_path = run_dir / "runner-report.json"
         command = adapter.build_command(request, run_dir)
@@ -697,6 +908,7 @@ class LocalRunManager:
                 start_new_session=os.name != "nt",
             )
         except Exception:
+            label = _runner_label(request.lane_id)
             failed = self._base_state(
                 handle=handle,
                 request=request,
@@ -710,13 +922,14 @@ class LocalRunManager:
                 events_path=events_path,
                 final_message_path=final_message_path,
                 report_path=report_path,
-                summary="Local Codex process could not be started.",
+                summary=f"Local {label} process could not be started.",
                 error="process-start-failed",
             )
             failed["finished_at"] = _utc_now()
             self._write_state(state_path, latest_path, failed)
-            raise ValueError("local Codex process could not be started")
+            raise ValueError(f"local {label} process could not be started")
 
+        label = _runner_label(request.lane_id)
         running_handle = RunnerHandle(
             run_id=handle.run_id,
             adapter_id=handle.adapter_id,
@@ -724,7 +937,7 @@ class LocalRunManager:
             process_id=process.pid,
             local_execution=True,
             remote_execution=False,
-            summary="Local Codex process is running inside the workspace-write sandbox.",
+            summary=f"Local {label} process is running under {plan.sandbox_policy}.",
         )
         active = _ActiveRun(
             key=key,
@@ -865,19 +1078,21 @@ class LocalRunManager:
                 returncode = active.process.wait(timeout=5)
         if active.reader_thread:
             active.reader_thread.join(timeout=5)
+        active.adapter.persist_final_message(active.output_path, active.final_message_path)
 
+        label = _runner_label(active.request.lane_id)
         if active.cancel_requested:
             status = "cancelled"
-            summary = "Local Codex run was cancelled by the operator."
+            summary = f"Local {label} run was cancelled by the operator."
         elif timed_out:
             status = "timed-out"
-            summary = f"Local Codex run exceeded the {active.timeout_seconds}-second timeout."
+            summary = f"Local {label} run exceeded the {active.timeout_seconds}-second timeout."
         elif returncode == 0:
             status = "succeeded"
-            summary = "Local Codex run completed successfully inside the bounded workspace."
+            summary = f"Local {label} run completed successfully inside the bounded workspace."
         else:
             status = "failed"
-            summary = f"Local Codex run exited with code {returncode}."
+            summary = f"Local {label} run exited with code {returncode}."
 
         final_handle = RunnerHandle(
             run_id=active.handle.run_id,
@@ -1050,8 +1265,9 @@ def _packet_run_request(repo: Path, packet: dict[str, Any]) -> tuple[RunnerReque
         raise ValueError("packet must be at execute stage before local launch")
     if str(packet.get("status")) != "execution-ready":
         raise ValueError("packet is not execution-ready")
-    if str(lane.get("id") or packet.get("agent_id")) != "codex":
-        raise ValueError("only the Codex lane has a live local adapter")
+    lane_id = str(lane.get("id") or packet.get("agent_id")).lower().strip()
+    if lane_id not in {"codex", "hermes"}:
+        raise ValueError("this lane does not have a live local adapter")
     if int(gate_run.get("blocked") or 0) > 0:
         raise ValueError("blocked gates prevent local launch")
     if int(gate_run.get("warnings") or 0) > 0:
@@ -1074,7 +1290,7 @@ def _packet_run_request(repo: Path, packet: dict[str, Any]) -> tuple[RunnerReque
     return (
         RunnerRequest(
             packet_id=str(packet.get("packet_id") or ""),
-            lane_id="codex",
+            lane_id=lane_id,
             repo=repo.resolve(),
             task=task,
             gate_status=str(gate_run.get("status") or "unknown"),
@@ -1092,7 +1308,7 @@ def start_packet_run(
     timeout_seconds: int = DEFAULT_RUN_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     request, packet_dir = _packet_run_request(repo.resolve(), packet)
-    adapter = CodexLocalRunnerAdapter()
+    adapter = runner_adapter_for_lane(request.lane_id)
     plan = adapter.prepare(request, packet_dir)
     if not plan.launch_supported:
         raise ValueError(plan.adapter_detail)

@@ -151,7 +151,7 @@ const journeyExpression = String.raw`
     let lastError = null;
     while (Date.now() < deadline) {
       try {
-        const value = check();
+        const value = await check();
         if (value) return value;
       } catch (error) {
         lastError = error;
@@ -208,6 +208,59 @@ const journeyExpression = String.raw`
   if (packet.runner_run?.remote_execution !== false) throw new Error('Remote execution unexpectedly enabled');
   if (packet.attach_evidence !== false) throw new Error('Evidence should remain optional on the main path');
 
+  const hermesCreateResponse = await fetch('/api/packets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      repo,
+      task: 'Review this bounded local packet and return a concise result.',
+      agent_id: 'hermes',
+      stage: 'execute',
+      attach_evidence: false,
+    }),
+  });
+  const hermesCreatePayload = await hermesCreateResponse.json();
+  if (!hermesCreateResponse.ok) throw new Error(hermesCreatePayload.error || 'Hermes packet creation failed');
+  const hermesPacketId = hermesCreatePayload.packet.packet_id;
+  if (hermesCreatePayload.packet.runner_plan?.mode !== 'local-hermes-one-shot') {
+    throw new Error('Hermes packet did not expose the one-shot adapter');
+  }
+  const hermesLaunchResponse = await fetch(
+    '/api/packets/' + encodeURIComponent(hermesPacketId) + '/run?repo=' + encodeURIComponent(repo),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timeout_seconds: 20 }),
+    },
+  );
+  const hermesLaunchPayload = await hermesLaunchResponse.json();
+  if (!hermesLaunchResponse.ok) throw new Error(hermesLaunchPayload.error || 'Hermes launch failed');
+  let hermesRun = hermesLaunchPayload.run;
+  await waitFor(async () => {
+    const response = await fetch(
+      '/api/packets/' + encodeURIComponent(hermesPacketId) + '/run?repo=' + encodeURIComponent(repo),
+    );
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Hermes run poll failed');
+    hermesRun = payload.run;
+    return !['starting', 'running', 'cancelling'].includes(hermesRun.status);
+  }, 'Hermes local run', 30000);
+  if (hermesRun.status !== 'succeeded') throw new Error('Hermes local run did not succeed');
+  if (hermesRun.remote_execution !== false) throw new Error('Hermes enabled remote command execution');
+  if (hermesRun.last_message !== 'Synthetic Hermes Agent browser run completed locally.') {
+    throw new Error('Hermes final response was not persisted');
+  }
+  await loadPacketDetail(hermesPacketId);
+  await waitFor(
+    () => q('#runner-control-title')?.textContent === 'Hermes Agent run complete',
+    'Hermes packet detail state',
+  );
+  if (q('#runner-sandbox-state')?.textContent !== 'hermes-safe-mode-checkpoints') {
+    throw new Error('Hermes safety policy was not rendered');
+  }
+  click('[data-page-target="start"]');
+  await waitFor(() => activePage('start'), 'simple home after Hermes run');
+
   click('[data-page-target="recorder"]');
   await waitFor(() => activePage('recorder'), 'Recorder page');
   setValue('#recorder-task-input', 'Capture a local evidence trace for the simple journey.');
@@ -260,6 +313,9 @@ const journeyExpression = String.raw`
     runner_status: packet.runner_run.status,
     remote_execution: packet.runner_run.remote_execution,
     evidence_main: packet.attach_evidence,
+    hermes_packet_id: hermesPacketId,
+    hermes_status: hermesRun.status,
+    hermes_remote_execution: hermesRun.remote_execution,
     recorder_packet_id: recorderId,
     evidence_recorder: recorderPayload.packet.attach_evidence,
     cancellation_packet_id: cancelPacketId,
@@ -340,6 +396,7 @@ async function main() {
   const python = process.env.PYTHON || "python";
   const pythonPath = [path.join(projectRoot, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
   const fakeCodexPath = path.join(runDir, "fake_codex.py");
+  const fakeHermesPath = path.join(runDir, "fake_hermes.py");
   await writeFile(
     fakeCodexPath,
     `from __future__ import annotations
@@ -380,15 +437,35 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
 `,
     "utf8",
   );
+  await writeFile(
+    fakeHermesPath,
+    `from __future__ import annotations
+import sys
+
+if "--version" in sys.argv:
+    print("Hermes Agent 9.9.9-browser-test")
+    raise SystemExit(0)
+if "-z" not in sys.argv:
+    raise SystemExit(2)
+print("Synthetic Hermes Agent browser run completed locally.", flush=True)
+`,
+    "utf8",
+  );
   await runProcess("git", ["init", "--quiet"], workspace);
   const codexCommand = JSON.stringify([python, fakeCodexPath]);
+  const hermesCommand = JSON.stringify([python, fakeHermesPath]);
   let serverOutput = "";
   const server = spawn(
     python,
     ["-m", "hamiltonian", "cockpit", "--repo", workspace, "--host", "127.0.0.1", "--port", String(appPort)],
     {
       cwd: projectRoot,
-      env: { ...process.env, PYTHONPATH: pythonPath, HAMILTONIAN_CODEX_COMMAND: codexCommand },
+      env: {
+        ...process.env,
+        PYTHONPATH: pythonPath,
+        HAMILTONIAN_CODEX_COMMAND: codexCommand,
+        HAMILTONIAN_HERMES_COMMAND: hermesCommand,
+      },
       windowsHide: true,
     },
   );
@@ -582,7 +659,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.3.0");
+    ).replace("__HAMILTONIAN_VERSION__", "0.4.0");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
