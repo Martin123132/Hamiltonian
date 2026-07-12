@@ -156,6 +156,13 @@ def test_packet_runner_api_launches_hermes_adapter_and_persists_ui_state(
     try:
         base_url = f"http://127.0.0.1:{server.server_port}"
         query = urlencode({"repo": str(tmp_path)})
+        with urlopen(f"{base_url}/api/state?{query}", timeout=20) as response:
+            runtime = json.loads(response.read().decode("utf-8"))
+        hermes_status = next(
+            adapter for adapter in runtime["runner_adapters"] if adapter["id"] == "hermes"
+        )
+        assert hermes_status["available"] is True
+        assert hermes_status["remote_execution"] is False
         launch = Request(
             f"{base_url}/api/packets/{packet.packet_id}/run?{query}",
             data=json.dumps({"timeout_seconds": 10}).encode("utf-8"),

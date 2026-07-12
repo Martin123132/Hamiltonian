@@ -85,12 +85,34 @@
               placeholder="Describe the result you want."
               data-testid="simple-task"
             ></textarea>
+            <fieldset id="simple-lane-picker" class="simple-lane-picker" data-testid="simple-lane-picker">
+              <legend>Choose worker</legend>
+              <div class="simple-lane-segments" role="radiogroup" aria-label="Agent lane">
+                <label>
+                  <input type="radio" name="simple-agent-lane" value="auto" checked />
+                  <span><strong>Auto</strong><small id="simple-lane-auto-status">Recommended</small></span>
+                </label>
+                <label>
+                  <input type="radio" name="simple-agent-lane" value="codex" />
+                  <span><strong>Codex</strong><small id="simple-lane-codex-status">Checking</small></span>
+                </label>
+                <label>
+                  <input type="radio" name="simple-agent-lane" value="hermes" />
+                  <span><strong>Hermes</strong><small id="simple-lane-hermes-status">Checking</small></span>
+                </label>
+              </div>
+            </fieldset>
+            <div id="simple-lane-guidance" class="simple-lane-guidance" aria-live="polite" data-testid="simple-lane-guidance">
+              <span id="simple-lane-guidance-status">Recommendation</span>
+              <strong id="simple-lane-guidance-title">Checking local adapters</strong>
+              <p id="simple-lane-guidance-body">Hamiltonian is checking which local worker can run this job.</p>
+            </div>
             <div class="simple-run-actions">
               <span id="simple-task-count">0/600</span>
               <button id="simple-run-button" class="simple-run-button" type="submit" data-testid="simple-run">Run locally</button>
             </div>
             <div class="simple-runtime-line" aria-label="Runtime boundary">
-              <span>Codex</span>
+              <span id="simple-runtime-agent">Auto</span>
               <span id="simple-workspace-name">Workspace loading</span>
               <span>Remote execution off</span>
             </div>
@@ -361,11 +383,11 @@
             <ol class="tutorial-steps" aria-label="Hamiltonian walkthrough">
               <li class="tutorial-step" data-stage="draft">
                 <strong>Tell it the job</strong>
-                <p>Write the work you want done, then save it as a packet.</p>
+                <p>On Mission Home, write the result you want in plain language.</p>
               </li>
               <li class="tutorial-step" data-stage="route">
                 <strong>Choose the worker</strong>
-                <p>Hamiltonian recommends a lane, but the operator can override it.</p>
+                <p>Leave Auto selected or choose Codex or Hermes yourself.</p>
               </li>
               <li class="tutorial-step" data-stage="gate">
                 <strong>Check before moving</strong>

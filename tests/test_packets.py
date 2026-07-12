@@ -21,8 +21,8 @@ from hamiltonian.packets import (
     task_index_path,
 )
 from hamiltonian.integrations import IntegrationStatus
-from hamiltonian.runtime import runtime_state_dict
-from hamiltonian.runners import RUNNER_RUN_SCHEMA
+from hamiltonian.runtime import build_runner_adapters, runtime_state_dict
+from hamiltonian.runners import AdapterProbe, RUNNER_RUN_SCHEMA
 from hamiltonian.server import CockpitHandler
 
 
@@ -539,6 +539,8 @@ def test_runtime_state_includes_recent_packets(tmp_path: Path) -> None:
     assert state["route_recommendations"][0]["lane_id"] == "codex"
     assert state["route_recommendations"][0]["status"] == "recommended"
     assert state["route_recommendations"][0]["remote_execution"] is False
+    assert {adapter["id"] for adapter in state["runner_adapters"]} == {"codex", "hermes"}
+    assert all(adapter["remote_execution"] is False for adapter in state["runner_adapters"])
     assert state["recent_packets"][0]["packet_id"] == packet.packet_id
     assert state["recent_packets"][0]["agent_id"] == "local"
     assert state["recent_packets"][0]["lane"]["id"] == "local"
@@ -552,6 +554,33 @@ def test_runtime_state_includes_recent_packets(tmp_path: Path) -> None:
     assert state["recent_packets"][0]["memory_mode"].startswith("repomori-")
     assert state["recent_packets"][0]["evidence_status"] == "skipped"
     assert state["recent_packets"][0]["route"]["recommended_lane_id"] == "local"
+
+
+def test_runtime_adapter_status_reports_ready_and_unavailable_without_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "hamiltonian.runtime.probe_codex_command",
+        lambda _repo: AdapterProbe(True, ("private-codex-path",), "codex-cli test"),
+    )
+    monkeypatch.setattr(
+        "hamiltonian.runtime.probe_hermes_command",
+        lambda _repo: AdapterProbe(False, ("private-hermes-path",), "Hermes probe failed"),
+    )
+
+    statuses = build_runner_adapters(tmp_path, git_available=True)
+    encoded = json.dumps([status.__dict__ for status in statuses])
+
+    assert statuses[0].id == "codex"
+    assert statuses[0].available is True
+    assert statuses[1].id == "hermes"
+    assert statuses[1].available is False
+    assert statuses[1].detail == "Hermes probe failed"
+    assert "outside Hamiltonian" in statuses[1].setup_guidance
+    assert all(status.remote_execution is False for status in statuses)
+    assert "private-codex-path" not in encoded
+    assert "private-hermes-path" not in encoded
 
 
 def test_runtime_state_reflects_memory_fallback_mode(tmp_path: Path, monkeypatch) -> None:
@@ -954,6 +983,14 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="simple-task-input"' in html
     assert 'data-testid="simple-task"' in html
     assert 'id="simple-run-button"' in html
+    assert 'id="simple-lane-picker"' in html
+    assert 'data-testid="simple-lane-picker"' in html
+    assert 'name="simple-agent-lane" value="auto"' in html
+    assert 'name="simple-agent-lane" value="codex"' in html
+    assert 'name="simple-agent-lane" value="hermes"' in html
+    assert 'id="simple-lane-guidance"' in html
+    assert 'data-testid="simple-lane-guidance"' in html
+    assert 'id="simple-runtime-agent"' in html
     assert 'id="simple-workspace-name"' in html
     assert 'data-testid="simple-run"' in html
     assert 'id="simple-run-status"' in html
@@ -1164,6 +1201,10 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function cancelSimpleMission" in app
     assert "function pollSimpleRunner" in app
     assert "function renderSimpleRunExperience" in app
+    assert "function renderSimpleLanePicker" in app
+    assert "function resolveSimpleLane" in app
+    assert "function refreshSimpleRoutes" in app
+    assert "agent_id: laneId" in app
     assert "simple-run-button" in app
     assert "function openGoalBuilder" in app
     assert "function refreshGoalPreview" in app

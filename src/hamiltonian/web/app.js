@@ -20,6 +20,10 @@ const state = {
   runnerPollSeq: 0,
   simplePollTimer: null,
   simplePollSeq: 0,
+  simpleRouteTimer: null,
+  simpleRouteSeq: 0,
+  simpleRoutes: [],
+  simpleLane: "auto",
   goalPreviewTimer: null,
   goalHistoryTimer: null,
   goalDraft: null,
@@ -32,6 +36,8 @@ const state = {
     body: "",
     packetId: null,
     result: "",
+    laneId: null,
+    laneName: "",
   },
 };
 const ACTIVE_RUN_STATES = new Set(["starting", "running", "cancelling"]);
@@ -97,12 +103,12 @@ const MAP_STEPS = [
 const TUTORIAL_STEPS = {
   draft: {
     title: "Tell it the job",
-    body: "Write one bounded job. Hamiltonian turns it into a packet the rest of the cockpit can guide.",
+    body: "On Mission Home, write the result you want. Hamiltonian turns it into a packet the cockpit can guide.",
     anchor: "cockpit",
   },
   route: {
     title: "Choose the worker",
-    body: "Use the recommended lane or override it deliberately. The route is advice; the gates still decide.",
+    body: "Leave Auto selected or choose Codex or Hermes. Hamiltonian shows readiness before anything runs.",
     anchor: "routes",
   },
   gate: {
@@ -2422,6 +2428,124 @@ function setSimpleRunState(status, title, body, options = {}) {
   renderSimpleRunExperience();
 }
 
+function simpleAdapterStatuses(data = state.data) {
+  return new Map((data?.runner_adapters || []).map((adapter) => [adapter.id, adapter]));
+}
+
+function simpleLaneSelection() {
+  return $("input[name='simple-agent-lane']:checked")?.value || state.simpleLane || "auto";
+}
+
+function simpleRouteOptions(data = state.data) {
+  return state.simpleRoutes.length ? state.simpleRoutes : data?.route_recommendations || [];
+}
+
+function resolveSimpleLane(data = state.data) {
+  const selected = simpleLaneSelection();
+  if (selected === "codex" || selected === "hermes") return selected;
+  const adapters = simpleAdapterStatuses(data);
+  const routed = simpleRouteOptions(data)
+    .filter((route) => route.lane_id === "codex" || route.lane_id === "hermes")
+    .find((route) => adapters.get(route.lane_id)?.available);
+  if (routed) return routed.lane_id;
+  const available = ["codex", "hermes"].find((laneId) => adapters.get(laneId)?.available);
+  if (available) return available;
+  const recommended = simpleRouteOptions(data).find(
+    (route) => route.lane_id === "codex" || route.lane_id === "hermes",
+  );
+  return recommended?.lane_id || "codex";
+}
+
+function simpleAdapterForLane(laneId, data = state.data) {
+  return simpleAdapterStatuses(data).get(laneId) || {
+    id: laneId,
+    name: laneId === "hermes" ? "Hermes Agent" : "Codex",
+    available: false,
+    detail: "Adapter status is unavailable.",
+    safety: "Local supervised process; remote command execution remains off.",
+    setup_guidance: "Reopen Hamiltonian to check this adapter again.",
+  };
+}
+
+function renderSimpleLanePicker(data = state.data) {
+  if (!data) return;
+  const selected = simpleLaneSelection();
+  state.simpleLane = selected;
+  const resolvedLane = resolveSimpleLane(data);
+  const adapter = simpleAdapterForLane(resolvedLane, data);
+  const active = simpleRunIsActive() || ["saving", "checking"].includes(state.simpleRun.status);
+  const routes = simpleRouteOptions(data);
+  const routed = routes.find((route) => route.lane_id === resolvedLane);
+
+  ["codex", "hermes"].forEach((laneId) => {
+    const current = simpleAdapterForLane(laneId, data);
+    const input = $(`input[name='simple-agent-lane'][value='${laneId}']`);
+    const label = input?.closest("label");
+    if (label) label.dataset.available = String(Boolean(current.available));
+    setText(`#simple-lane-${laneId}-status`, current.available ? "Ready" : "Unavailable");
+  });
+  $("input[name='simple-agent-lane'][value='auto']")?.closest("label")?.setAttribute(
+    "data-available",
+    String(Boolean(adapter.available)),
+  );
+  setText("#simple-lane-auto-status", adapter.available ? `Use ${adapter.name}` : "Needs setup");
+
+  document.querySelectorAll("input[name='simple-agent-lane']").forEach((input) => {
+    input.disabled = active;
+  });
+
+  const guidance = $("#simple-lane-guidance");
+  if (guidance) guidance.dataset.available = String(Boolean(adapter.available));
+  setText("#simple-lane-guidance-status", selected === "auto" ? "Recommendation" : "Your selection");
+  setText("#simple-lane-guidance-title", `${adapter.name} ${adapter.available ? "is ready" : "needs setup"}`);
+  setText(
+    "#simple-lane-guidance-body",
+    adapter.available
+      ? selected === "auto"
+        ? `${routed?.summary || `${adapter.name} is the best callable fit for this task.`} ${adapter.safety}`
+        : `Hamiltonian will record your ${adapter.name} choice in the packet. ${adapter.safety}`
+      : `${adapter.detail} ${adapter.setup_guidance}`,
+  );
+  setText("#simple-runtime-agent", selected === "auto" ? `Auto: ${adapter.name}` : adapter.name);
+  const runButton = $("#simple-run-button");
+  if (runButton && !active) runButton.textContent = `Run with ${adapter.name}`;
+}
+
+function scheduleSimpleRouteUpdate(delay = 250) {
+  window.clearTimeout(state.simpleRouteTimer);
+  state.simpleRouteTimer = window.setTimeout(() => {
+    refreshSimpleRoutes().catch((error) => {
+      setText("#simple-lane-guidance-body", error.message);
+    });
+  }, delay);
+}
+
+async function refreshSimpleRoutes() {
+  const task = $("#simple-task-input")?.value.trim() || "";
+  if (!task) {
+    state.simpleRoutes = [];
+    renderSimpleLanePicker();
+    return;
+  }
+  const sequence = state.simpleRouteSeq + 1;
+  state.simpleRouteSeq = sequence;
+  const selected = simpleLaneSelection();
+  const response = await fetch("/api/routes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      repo: $("#repo-input").value || state.repo,
+      task,
+      agent_id: selected === "auto" ? "codex" : selected,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not refresh lane advice.");
+  if (sequence !== state.simpleRouteSeq) return;
+  state.simpleRoutes = payload.route_recommendations || [];
+  renderSimpleLanePicker();
+}
+
 function simpleRunIsActive() {
   return ["starting", "running", "cancelling"].includes(state.simpleRun.status);
 }
@@ -2456,10 +2580,14 @@ function renderSimpleRunExperience() {
   setText("#simple-status-body", run.body);
 
   if (runButton) {
-    runButton.textContent = active ? (run.status === "cancelling" ? "Stopping..." : "Stop") : "Run locally";
+    const adapter = simpleAdapterForLane(resolveSimpleLane());
+    runButton.textContent = active
+      ? run.status === "cancelling" ? "Stopping..." : "Stop"
+      : `Run with ${adapter.name}`;
     runButton.disabled = busyBeforeLaunch || run.status === "cancelling";
   }
   if (taskInput) taskInput.disabled = active || busyBeforeLaunch;
+  renderSimpleLanePicker();
   if (openButton) openButton.disabled = !run.packetId;
   if (goalButton) goalButton.hidden = !(run.status === "succeeded" && Boolean(run.result));
 
@@ -2699,18 +2827,21 @@ async function recordGoalReview(goalId, packetId, report) {
 
 async function applySimpleRunnerState(packetId, run) {
   const status = String(run?.status || "failed");
+  const adapter = simpleAdapterForLane(run?.lane_id || state.simpleRun.laneId || resolveSimpleLane());
   if (["starting", "running", "cancelling"].includes(status)) {
     const title = status === "cancelling" ? "Stopping the job" : "Working on it";
-    setSimpleRunState(status, title, run.summary || "Codex is working inside the local workspace.", {
+    setSimpleRunState(status, title, run.summary || `${adapter.name} is working inside the local workspace.`, {
       packetId,
       result: "",
+      laneId: adapter.id,
+      laneName: adapter.name,
     });
     return true;
   }
 
   const messages = {
     succeeded: ["Done", run.summary || "The local job completed."],
-    failed: ["The job failed", run.summary || "Codex stopped with an error."],
+    failed: ["The job failed", run.summary || `${adapter.name} stopped with an error.`],
     "timed-out": ["The job took too long", run.summary || "Hamiltonian stopped it at the selected time limit."],
     cancelled: ["Job stopped", run.summary || "The local job was stopped."],
     interrupted: ["Job interrupted", run.summary || "The local process ended unexpectedly."],
@@ -2799,11 +2930,24 @@ async function runSimpleMission() {
   state.goalDraft = null;
   setHomeCockpitMode("orchestrate");
   const repo = $("#repo-input").value || state.repo;
+  if (simpleLaneSelection() === "auto") {
+    setSimpleRunState("checking", "Choosing the worker", "Matching this task to callable local adapters...", {
+      packetId: null,
+      result: "",
+      laneId: null,
+      laneName: "",
+    });
+    await refreshSimpleRoutes();
+  }
+  const laneId = resolveSimpleLane();
+  const adapter = simpleAdapterForLane(laneId);
   const attachEvidence = Boolean($("#simple-evidence-toggle")?.checked);
   const timeoutSeconds = Number.parseInt($("#simple-timeout-input")?.value || "900", 10);
   setSimpleRunState("saving", "Checking the job", "Saving it locally and running the safety checks...", {
     packetId: null,
     result: "",
+    laneId,
+    laneName: adapter.name,
   });
 
   const response = await fetch("/api/packets", {
@@ -2812,7 +2956,7 @@ async function runSimpleMission() {
     body: JSON.stringify({
       repo,
       task,
-      agent_id: "codex",
+      agent_id: laneId,
       stage: "execute",
       attach_evidence: attachEvidence,
       mode: "orchestrate",
@@ -2840,16 +2984,18 @@ async function runSimpleMission() {
     state.activeReviewGoalId = null;
     setSimpleRunState(
       "unavailable",
-      "Job saved, but Codex could not start",
-      packet.runner_plan?.adapter_detail || "The Codex command is not available on this computer.",
-      { packetId: packet.packet_id },
+      `Job saved, but ${adapter.name} could not start`,
+      packet.runner_plan?.adapter_detail || `${adapter.name} is not available on this computer.`,
+      { packetId: packet.packet_id, laneId, laneName: adapter.name },
     );
     await load(repo);
     return;
   }
 
-  setSimpleRunState("starting", "Starting the job", "Opening Codex inside the local workspace...", {
+  setSimpleRunState("starting", "Starting the job", `Opening ${adapter.name} inside the local workspace...`, {
     packetId: packet.packet_id,
+    laneId,
+    laneName: adapter.name,
   });
   const params = _queryRepoParams();
   const launchResponse = await fetch(`/api/packets/${encodeURIComponent(packet.packet_id)}/run?${params.toString()}`, {
@@ -2858,7 +3004,9 @@ async function runSimpleMission() {
     body: JSON.stringify({ timeout_seconds: timeoutSeconds }),
   });
   const launchPayload = await launchResponse.json();
-  if (!launchResponse.ok || launchPayload.error) throw new Error(launchPayload.error || "Codex could not start the local job.");
+  if (!launchResponse.ok || launchPayload.error) {
+    throw new Error(launchPayload.error || `${adapter.name} could not start the local job.`);
+  }
   const keepPolling = await applySimpleRunnerState(packet.packet_id, launchPayload.run);
   if (keepPolling) await pollSimpleRunner(packet.packet_id);
 }
@@ -2869,6 +3017,7 @@ function renderMissionHome(data) {
   if (!home) return;
   home.dataset.packetId = state.simpleRun.packetId || "";
   setText("#simple-task-count", `${$("#simple-task-input")?.value.length || 0}/600`);
+  renderSimpleLanePicker(data);
   renderSimpleRunExperience();
   renderHomeRecentPackets(data);
   renderGoalHistory();
@@ -4605,12 +4754,29 @@ function initMissionHomeControls() {
   if (taskInput) {
     taskInput.addEventListener("input", () => {
       setText("#simple-task-count", `${taskInput.value.length}/600`);
+      scheduleSimpleRouteUpdate();
       if (state.simpleRun.status === "error" && !state.simpleRun.packetId) {
-        state.simpleRun = { status: "idle", title: "Ready", body: "", packetId: null, result: "" };
+        state.simpleRun = {
+          status: "idle",
+          title: "Ready",
+          body: "",
+          packetId: null,
+          result: "",
+          laneId: null,
+          laneName: "",
+        };
         renderSimpleRunExperience();
       }
     });
   }
+
+  document.querySelectorAll("input[name='simple-agent-lane']").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.simpleLane = simpleLaneSelection();
+      renderSimpleLanePicker();
+      scheduleSimpleRouteUpdate(0);
+    });
+  });
 
   const openPacket = $("#simple-open-packet");
   if (openPacket) {
@@ -4631,6 +4797,11 @@ function initMissionHomeControls() {
       if (manualInput && taskInput?.value.trim()) {
         manualInput.value = taskInput.value;
         manualInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      const manualLane = $("#agent-select");
+      const simpleLane = resolveSimpleLane();
+      if (manualLane && [...manualLane.options].some((option) => option.value === simpleLane)) {
+        manualLane.value = simpleLane;
       }
       revealSection("cockpit");
       manualInput?.focus();

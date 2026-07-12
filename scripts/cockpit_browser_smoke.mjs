@@ -183,6 +183,17 @@ const journeyExpression = String.raw`
   if (visibleNav.length !== 4) throw new Error('Expected four primary navigation choices, found ' + visibleNav.length);
   if (q('#simple-run-options')?.open) throw new Error('Advanced run options should start closed');
 
+  const codexAdapter = state.data.runner_adapters.find((adapter) => adapter.id === 'codex');
+  if (!codexAdapter?.available) throw new Error('Codex fake adapter was not reported ready');
+  const codexReadyState = { ...codexAdapter };
+  Object.assign(codexAdapter, { available: false, detail: 'Synthetic Codex probe unavailable.' });
+  renderSimpleLanePicker();
+  if (q('#simple-runtime-agent')?.textContent !== 'Auto: Hermes Agent') {
+    throw new Error('Auto did not fall back to the callable Hermes adapter');
+  }
+  Object.assign(codexAdapter, codexReadyState);
+  renderSimpleLanePicker();
+
   setValue('#simple-task-input', 'Implement a bounded local cockpit journey and report the result.');
   click('[data-testid="simple-run"]');
   await waitFor(
@@ -208,47 +219,65 @@ const journeyExpression = String.raw`
   if (packet.runner_run?.remote_execution !== false) throw new Error('Remote execution unexpectedly enabled');
   if (packet.attach_evidence !== false) throw new Error('Evidence should remain optional on the main path');
 
-  const hermesCreateResponse = await fetch('/api/packets', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      repo,
-      task: 'Review this bounded local packet and return a concise result.',
-      agent_id: 'hermes',
-      stage: 'execute',
-      attach_evidence: false,
-    }),
+  const hermesAdapter = state.data.runner_adapters.find((adapter) => adapter.id === 'hermes');
+  if (!hermesAdapter?.available) throw new Error('Hermes fake adapter was not reported ready');
+  const hermesReadyState = { ...hermesAdapter };
+  Object.assign(hermesAdapter, {
+    available: false,
+    detail: 'Synthetic probe unavailable.',
+    setup_guidance: 'Configure Hermes outside Hamiltonian, then reopen this workspace.',
   });
-  const hermesCreatePayload = await hermesCreateResponse.json();
-  if (!hermesCreateResponse.ok) throw new Error(hermesCreatePayload.error || 'Hermes packet creation failed');
-  const hermesPacketId = hermesCreatePayload.packet.packet_id;
-  if (hermesCreatePayload.packet.runner_plan?.mode !== 'local-hermes-one-shot') {
+  click('input[name="simple-agent-lane"][value="hermes"]');
+  renderSimpleLanePicker();
+  if (q('#simple-lane-guidance-title')?.textContent !== 'Hermes Agent needs setup') {
+    throw new Error('Hermes unavailable guidance was not rendered');
+  }
+  if (!q('#simple-lane-guidance-body')?.textContent.includes('outside Hamiltonian')) {
+    throw new Error('Hermes setup guidance was not shown');
+  }
+  Object.assign(hermesAdapter, hermesReadyState);
+  renderSimpleLanePicker();
+  await waitFor(
+    () => q('#simple-lane-guidance-title')?.textContent === 'Hermes Agent is ready',
+    'Hermes lane readiness',
+  );
+  if (q('[data-testid="simple-run"]')?.textContent !== 'Run with Hermes Agent') {
+    throw new Error('Mission Home did not switch its action to Hermes');
+  }
+  setValue('#simple-task-input', 'Review this bounded local packet and return a concise result.');
+  click('[data-testid="simple-run"]');
+  await waitFor(
+    () => q('[data-testid="simple-status"]')?.dataset.status !== 'succeeded',
+    'Hermes Mission Home run start',
+  );
+  await waitFor(
+    () =>
+      q('[data-testid="simple-status"]')?.dataset.status === 'succeeded' &&
+      q('#mission-home')?.dataset.packetId &&
+      q('#mission-home')?.dataset.packetId !== packetId,
+    'Hermes Mission Home run',
+    30000,
+  );
+  const hermesPacketId = q('#mission-home')?.dataset.packetId;
+  if (!hermesPacketId || hermesPacketId === packetId) throw new Error('Hermes Mission Home packet was not created');
+  const hermesResponse = await fetch(
+    '/api/packets/' + encodeURIComponent(hermesPacketId) + '?repo=' + encodeURIComponent(repo),
+  );
+  const hermesPayload = await hermesResponse.json();
+  if (!hermesResponse.ok) throw new Error(hermesPayload.error || 'Hermes packet detail failed');
+  if (hermesPayload.packet.runner_plan?.mode !== 'local-hermes-one-shot') {
     throw new Error('Hermes packet did not expose the one-shot adapter');
   }
-  const hermesLaunchResponse = await fetch(
+  const hermesRunResponse = await fetch(
     '/api/packets/' + encodeURIComponent(hermesPacketId) + '/run?repo=' + encodeURIComponent(repo),
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ timeout_seconds: 20 }),
-    },
   );
-  const hermesLaunchPayload = await hermesLaunchResponse.json();
-  if (!hermesLaunchResponse.ok) throw new Error(hermesLaunchPayload.error || 'Hermes launch failed');
-  let hermesRun = hermesLaunchPayload.run;
-  await waitFor(async () => {
-    const response = await fetch(
-      '/api/packets/' + encodeURIComponent(hermesPacketId) + '/run?repo=' + encodeURIComponent(repo),
-    );
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || 'Hermes run poll failed');
-    hermesRun = payload.run;
-    return !['starting', 'running', 'cancelling'].includes(hermesRun.status);
-  }, 'Hermes local run', 30000);
+  const hermesRunPayload = await hermesRunResponse.json();
+  if (!hermesRunResponse.ok) throw new Error(hermesRunPayload.error || 'Hermes run detail failed');
+  const hermesRun = hermesRunPayload.run;
   if (hermesRun.status !== 'succeeded') throw new Error('Hermes local run did not succeed');
   if (hermesRun.remote_execution !== false) throw new Error('Hermes enabled remote command execution');
   if (hermesRun.last_message !== 'Synthetic Hermes Agent browser run completed locally.') {
-    throw new Error('Hermes final response was not persisted');
+    throw new Error('Hermes final response was not persisted: ' + JSON.stringify(hermesRun));
   }
   await loadPacketDetail(hermesPacketId);
   await waitFor(
@@ -260,6 +289,8 @@ const journeyExpression = String.raw`
   }
   click('[data-page-target="start"]');
   await waitFor(() => activePage('start'), 'simple home after Hermes run');
+  click('input[name="simple-agent-lane"][value="codex"]');
+  await waitFor(() => q('[data-testid="simple-run"]')?.textContent === 'Run with Codex', 'Codex lane restore');
 
   click('[data-page-target="recorder"]');
   await waitFor(() => activePage('recorder'), 'Recorder page');
@@ -583,7 +614,11 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
       const input = document.querySelector('#simple-task-input');
       input.value = 'Run a read-only health check on this repository.';
       input.dispatchEvent(new Event('input', { bubbles: true }));
+      const autoLane = document.querySelector('input[name="simple-agent-lane"][value="auto"]');
+      if (autoLane) autoLane.checked = true;
+      state.simpleLane = 'auto';
       setSimpleRunState('idle', 'Ready', '', { packetId: null, result: '' });
+      renderSimpleLanePicker();
       const titles = [
         'Repository health check',
         'Release readiness review',
@@ -659,7 +694,7 @@ print("Synthetic Hermes Agent browser run completed locally.", flush=True)
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.4.0");
+    ).replace("__HAMILTONIAN_VERSION__", "0.4.1");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
