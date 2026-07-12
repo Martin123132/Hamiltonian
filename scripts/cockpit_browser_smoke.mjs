@@ -132,6 +132,17 @@ async function evaluate(client, expression) {
 }
 
 
+async function captureJpeg(client, outputPath) {
+  const screenshot = await client.send("Page.captureScreenshot", {
+    format: "jpeg",
+    quality: 88,
+    captureBeyondViewport: false,
+  });
+  await writeFile(outputPath, Buffer.from(screenshot.data, "base64"));
+  return outputPath;
+}
+
+
 const journeyExpression = String.raw`
 (async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -318,7 +329,7 @@ const goalLifecycleExpression = String.raw`
 async function main() {
   await mkdir(qaRoot, { recursive: true });
   const runDir = await mkdtemp(path.join(qaRoot, "browser-smoke-"));
-  const workspace = path.join(runDir, "workspace");
+  const workspace = path.join(runDir, "Hamiltonian-Demo");
   const browserProfile = path.join(runDir, "browser-profile");
   await mkdir(workspace, { recursive: true });
   await mkdir(browserProfile, { recursive: true });
@@ -431,7 +442,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
         {
           goal_id: result.maintenance_goal_id,
           status: "ready-for-review",
-          summary: "Browser QA work completed.",
+          summary: "Maintenance work completed and tests passed.",
           files_changed: ["src/example.py"],
           tests: ["browser smoke: passed"],
           branch: "main",
@@ -444,14 +455,94 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
       ),
       "utf8",
     );
+
+    await evaluate(client, `(async () => {
+      document.querySelector('#goal-dialog')?.close();
+      await refreshGoalHistory();
+      const titles = [
+        'Repository health check',
+        'Release readiness review',
+        'Dependency and security audit',
+        'Documentation quality review',
+        'Capture a local evidence trace',
+      ];
+      document.querySelectorAll('[data-testid="home-recent-packet"] strong').forEach((node, index) => {
+        if (titles[index]) node.textContent = titles[index];
+      });
+      document.querySelector('#home-goal-history')?.scrollIntoView({ block: 'start' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const readyPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-goal-ready-desktop.jpg"),
+    );
+
     const goalLifecycle = await evaluate(client, goalLifecycleExpression);
-    const desktop = await client.send("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 88,
-      captureBeyondViewport: false,
-    });
-    const desktopPath = path.join(qaRoot, "hamiltonian-runner-journey-desktop.jpg");
-    await writeFile(desktopPath, Buffer.from(desktop.data, "base64"));
+    await evaluate(client, `(async () => {
+      document.querySelector('#goal-dialog')?.close();
+      await refreshGoalHistory();
+      const titles = [
+        'Repository health check',
+        'Release readiness review',
+        'Dependency and security audit',
+        'Documentation quality review',
+        'Capture a local evidence trace',
+      ];
+      document.querySelectorAll('[data-testid="home-recent-packet"] strong').forEach((node, index) => {
+        if (titles[index]) node.textContent = titles[index];
+      });
+      document.querySelector('#home-goal-history')?.scrollIntoView({ block: 'start' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const lineagePath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-corrective-lineage-desktop.jpg"),
+    );
+
+    await evaluate(client, `(async () => {
+      window.scrollTo(0, 0);
+      const input = document.querySelector('#simple-task-input');
+      input.value = 'Run a read-only health check on this repository.';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      setSimpleRunState('idle', 'Ready', '', { packetId: null, result: '' });
+      const titles = [
+        'Repository health check',
+        'Release readiness review',
+        'Dependency and security audit',
+        'Documentation quality review',
+        'Capture a local evidence trace',
+      ];
+      document.querySelectorAll('[data-testid="home-recent-packet"] strong').forEach((node, index) => {
+        if (titles[index]) node.textContent = titles[index];
+      });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const homePath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-mission-home-desktop.jpg"),
+    );
+
+    await evaluate(client, `(async () => {
+      setSimpleRunState(
+        'succeeded',
+        'Health check complete',
+        'Hamiltonian completed the local check and saved the result.',
+        {
+          packetId: ${JSON.stringify(result.visual_packet_id)},
+          result: 'Repository health: **B - strong core.**\\n\\nTwo focused reliability improvements are ready for a Codex goal.',
+        },
+      );
+      document.querySelector('#simple-run-status')?.scrollIntoView({ block: 'center' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const checkPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-health-check-desktop.jpg"),
+    );
 
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 390,
@@ -459,22 +550,18 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
       deviceScaleFactor: 1,
       mobile: true,
     });
-    await evaluate(client, `
+    await evaluate(client, `(async () => {
       window.scrollTo(0, 0);
       document.activeElement?.blur();
-      const dialog = document.querySelector('#goal-dialog');
-      const preview = document.querySelector('#goal-preview');
-      if (dialog) dialog.scrollTop = 0;
-      if (preview) preview.scrollTop = 0;
-      new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    `);
-    const mobile = await client.send("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 88,
-      captureBeyondViewport: false,
-    });
-    const mobilePath = path.join(qaRoot, "hamiltonian-runner-journey-mobile.jpg");
-    await writeFile(mobilePath, Buffer.from(mobile.data, "base64"));
+      document.querySelector('#goal-dialog')?.close();
+      setSimpleRunState('idle', 'Ready', '', { packetId: null, result: '' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const mobilePath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-mission-home-mobile.jpg"),
+    );
 
     const launcherTemplate = await readFile(
       path.join(projectRoot, "src", "hamiltonian", "web", "desktop-launcher.html"),
@@ -484,18 +571,18 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
       "__HAMILTONIAN_RECENTS__",
       JSON.stringify([
         {
-          name: "The-Marked-Bench-Public",
-          path: "D:\\Codex\\Projects\\The-Marked-Bench-Public",
+          name: "Benchmark Lab",
+          path: "D:\\Projects\\Benchmark-Lab",
           last_opened: "2026-07-11T00:00:00Z",
           goal_summary: { total: 2, ready_for_review: 1, needs_correction: 0, complete: 1 },
         },
         {
-          name: "Tokometer",
-          path: "D:\\Codex\\Projects\\Tokometer",
+          name: "Research Toolkit",
+          path: "D:\\Projects\\Research-Toolkit",
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "browser-qa");
+    ).replace("__HAMILTONIAN_VERSION__", "0.3.0");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -507,15 +594,23 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
     });
     await evaluate(client, "new Promise((resolve) => { if (document.readyState === 'complete') resolve(true); else window.addEventListener('load', () => resolve(true), { once: true }); })");
     await evaluate(client, "window.dispatchEvent(new Event('pywebviewready')); true");
-    const launcher = await client.send("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 88,
-      captureBeyondViewport: false,
-    });
-    const launcherPath = path.join(qaRoot, "hamiltonian-desktop-launcher.jpg");
-    await writeFile(launcherPath, Buffer.from(launcher.data, "base64"));
+    const launcherPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-desktop-launcher.jpg"),
+    );
 
-    console.log(JSON.stringify({ ...result, ...goalLifecycle, screenshots: { desktop: desktopPath, mobile: mobilePath, launcher: launcherPath } }, null, 2));
+    console.log(JSON.stringify({
+      ...result,
+      ...goalLifecycle,
+      screenshots: {
+        mission_home: homePath,
+        health_check: checkPath,
+        goal_ready: readyPath,
+        corrective_lineage: lineagePath,
+        mobile: mobilePath,
+        launcher: launcherPath,
+      },
+    }, null, 2));
     await client.send("Browser.close").catch(() => {});
   } catch (error) {
     if (serverOutput.trim()) console.error(serverOutput.trim());
