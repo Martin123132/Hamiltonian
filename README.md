@@ -143,8 +143,11 @@ bounded production handoff:
    opens the repository in the Codex desktop app; choose the existing project
    task and paste the goal there.
 3. Codex performs the work and writes the requested local completion receipt.
-4. Return to Hamiltonian and press **Review completed goal** for a read-only
-   check against the saved baseline and acceptance criteria.
+4. Hamiltonian detects the receipt automatically and shows **Review now** in
+   Goal history. The review runs locally against the saved baseline and
+   acceptance criteria.
+5. A complete review closes the goal. An incomplete review offers **Create
+   corrective goal**, preserving the parent goal and grade lineage.
 
 Goal packages remain local under:
 
@@ -154,6 +157,8 @@ Goal packages remain local under:
   goal.json
   source-report.md
   return.json
+  review-report.md
+  review.json
 ```
 
 Hamiltonian adds `.hamiltonian/` to the repository's local Git exclude file;

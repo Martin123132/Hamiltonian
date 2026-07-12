@@ -207,6 +207,30 @@
         white-space: nowrap;
       }
 
+      .recent-workspace em {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 10px;
+        font-style: normal;
+        font-weight: 800;
+        grid-column: 1;
+        justify-self: start;
+        margin-top: 3px;
+        padding: 3px 7px;
+        text-transform: uppercase;
+      }
+
+      .recent-workspace em[data-status="review"] {
+        border-color: #76502f;
+        color: #ffb36c;
+      }
+
+      .recent-workspace em[data-status="correction"] {
+        border-color: #7c3a3a;
+        color: #ff7777;
+      }
+
       .recent-workspace b {
         color: var(--accent);
         font-size: 18px;
@@ -312,7 +336,24 @@
         path.textContent = workspace.path;
         const arrow = document.createElement('b');
         arrow.textContent = '>';
-        button.append(name, path, arrow);
+        button.append(name, path);
+        const summary = workspace.goal_summary || {};
+        if (summary.ready_for_review || summary.needs_correction) {
+          const goalStatus = document.createElement('em');
+          if (summary.ready_for_review) {
+            goalStatus.textContent = summary.ready_for_review === 1
+              ? '1 goal ready for review'
+              : `${summary.ready_for_review} goals ready for review`;
+            goalStatus.dataset.status = 'review';
+          } else {
+            goalStatus.textContent = summary.needs_correction === 1
+              ? '1 goal needs correction'
+              : `${summary.needs_correction} goals need correction`;
+            goalStatus.dataset.status = 'correction';
+          }
+          button.append(goalStatus);
+        }
+        button.append(arrow);
         button.addEventListener('click', async () => {
           setBusy(true);
           setStatus(`Opening ${workspace.name}...`);

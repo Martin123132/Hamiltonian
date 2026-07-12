@@ -21,7 +21,10 @@ const state = {
   simplePollTimer: null,
   simplePollSeq: 0,
   goalPreviewTimer: null,
+  goalHistoryTimer: null,
   goalDraft: null,
+  goals: [],
+  activeReviewGoalId: null,
   appInfo: null,
   simpleRun: {
     status: "idle",
@@ -2264,6 +2267,150 @@ function renderHomeRecentPackets(data) {
   });
 }
 
+function goalStatusLabel(status) {
+  return {
+    "awaiting-codex": "Waiting for Codex",
+    "ready-for-review": "Ready for review",
+    complete: "Complete",
+    corrected: "Corrected by follow-up",
+    "needs-correction": "Needs correction",
+    "correction-in-progress": "Correction in progress",
+    "receipt-invalid": "Receipt needs attention",
+  }[status] || String(status || "Unknown").replaceAll("-", " ");
+}
+
+function renderGoalHistory() {
+  const list = $("#goal-history-list");
+  if (!list) return;
+  clear(list);
+  const goals = state.goals || [];
+  const ready = goals.filter((goal) => goal.lifecycle_status === "ready-for-review").length;
+  const correction = goals.filter((goal) => goal.lifecycle_status === "needs-correction").length;
+  setText(
+    "#goal-history-summary",
+    ready ? `${ready} ready for review` : correction ? `${correction} need correction` : goals.length ? `${goals.length} local goals` : "No goals yet",
+  );
+  if (!goals.length) {
+    const empty = document.createElement("p");
+    empty.className = "goal-history-empty";
+    empty.textContent = "Completed Codex handoffs will appear here automatically.";
+    list.appendChild(empty);
+    return;
+  }
+
+  goals.forEach((goal) => {
+    const row = document.createElement("article");
+    row.className = "goal-history-row";
+    row.dataset.goalId = goal.goal_id;
+    row.dataset.testid = "goal-history-row";
+
+    const identity = document.createElement("div");
+    identity.className = "goal-history-identity";
+    const type = document.createElement("span");
+    type.textContent = goal.goal_type === "corrective" ? `Corrective goal ${goal.correction_index}` : `${goal.goal_type} goal`;
+    const objective = document.createElement("strong");
+    objective.textContent = goal.objective || goal.goal_id;
+    const id = document.createElement("small");
+    id.textContent = goal.goal_id;
+    identity.append(type, objective, id);
+
+    const detail = document.createElement("div");
+    detail.className = "goal-history-detail";
+    const stage = document.createElement("span");
+    const receiptReady = Boolean(goal.receipt?.valid);
+    const reviewReady = Boolean(goal.review?.valid);
+    stage.textContent = `Diagnosis saved / Goal saved / Receipt ${receiptReady ? "received" : "waiting"} / Review ${reviewReady ? "recorded" : "waiting"}`;
+    const summary = document.createElement("p");
+    summary.textContent = reviewReady
+      ? goal.review.summary || "Review recorded locally."
+      : receiptReady
+        ? goal.receipt.summary || "Codex reports the goal is ready for review."
+        : goal.receipt?.status === "invalid"
+          ? goal.receipt.error || "The return receipt could not be validated."
+          : "Waiting for Codex to write the local return receipt.";
+    const lineage = document.createElement("small");
+    const grade = goal.grade_movement ? `Grade: ${goal.grade_movement}. ` : "";
+    const parent = goal.parent_goal_id ? `Follows ${goal.parent_goal_id}. ` : "";
+    const children = goal.child_goal_ids?.length ? `${goal.child_goal_ids.length} corrective follow-up${goal.child_goal_ids.length === 1 ? "" : "s"}.` : "";
+    lineage.textContent = `${grade}${parent}${children}`.trim() || "Original goal.";
+    detail.append(stage, summary, lineage);
+
+    const status = document.createElement("div");
+    status.className = "goal-history-status";
+    const badge = document.createElement("span");
+    badge.className = "goal-history-badge";
+    badge.dataset.status = goal.lifecycle_status;
+    badge.textContent = goalStatusLabel(goal.lifecycle_status);
+    const actions = document.createElement("div");
+    actions.className = "goal-history-actions";
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "compact-button";
+    copy.textContent = "Copy goal";
+    copy.addEventListener("click", () => {
+      copyText(goal.goal_markdown)
+        .then(() => setText("#goal-history-summary", `Copied ${goal.goal_id}.`))
+        .catch((error) => setText("#goal-history-summary", error.message));
+    });
+    actions.appendChild(copy);
+
+    if (goal.lifecycle_status === "ready-for-review") {
+      const review = document.createElement("button");
+      review.type = "button";
+      review.className = "compact-button primary-action";
+      review.textContent = "Review now";
+      review.addEventListener("click", () => {
+        reviewGoalById(goal.goal_id).catch((error) => setText("#goal-history-summary", error.message));
+      });
+      actions.appendChild(review);
+    }
+    if (goal.lifecycle_status === "needs-correction") {
+      const corrective = document.createElement("button");
+      corrective.type = "button";
+      corrective.className = "compact-button primary-action";
+      corrective.textContent = "Create corrective goal";
+      corrective.addEventListener("click", () => {
+        createCorrectiveGoal(goal.goal_id).catch((error) => setText("#goal-history-summary", error.message));
+      });
+      actions.appendChild(corrective);
+    }
+    status.append(badge, actions);
+    row.append(identity, detail, status);
+    list.appendChild(row);
+  });
+}
+
+async function refreshGoalHistory() {
+  window.clearTimeout(state.goalHistoryTimer);
+  try {
+    const params = _queryRepoParams();
+    const response = await fetch(`/api/goals?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok || payload.error) throw new Error(payload.error || "Could not refresh goal history.");
+    state.goals = payload.goals || [];
+    renderGoalHistory();
+  } finally {
+    state.goalHistoryTimer = window.setTimeout(() => {
+      refreshGoalHistory().catch((error) => setText("#goal-history-summary", error.message));
+    }, 10000);
+  }
+}
+
+async function createCorrectiveGoal(goalId) {
+  const response = await fetch(`/api/goals/${encodeURIComponent(goalId)}/corrective`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo: $("#repo-input").value || state.repo }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not create the corrective goal.");
+  state.goalDraft = { goalType: "corrective", preview: payload.goal, saved: payload.goal };
+  renderGoalBuilder();
+  $("#goal-dialog")?.showModal();
+  await refreshGoalHistory();
+}
+
 function setSimpleRunState(status, title, body, options = {}) {
   state.simpleRun = {
     ...state.simpleRun,
@@ -2342,16 +2489,23 @@ function goalPayload() {
     source_packet_id: state.simpleRun.packetId || null,
     expansion_request: $("#goal-expansion-input")?.value.trim() || null,
     goal_id: state.goalDraft?.preview?.goal_id || state.goalDraft?.saved?.goal_id || null,
+    parent_goal_id: state.goalDraft?.preview?.parent_goal_id || state.goalDraft?.saved?.parent_goal_id || null,
   };
 }
 
 function renderGoalBuilder() {
   const draft = state.goalDraft || { goalType: "maintenance", preview: null, saved: null };
-  const maintenance = draft.goalType !== "expansion";
+  const corrective = draft.goalType === "corrective";
+  const maintenance = draft.goalType === "maintenance";
   const maintenanceButton = $("#goal-type-maintenance");
   const expansionButton = $("#goal-type-expansion");
+  const typeControl = $("#goal-type-control");
   const expansionField = $("#goal-expansion-field");
+  const saveButton = $("#goal-save-button");
   const preview = draft.saved || draft.preview;
+  if (typeControl) typeControl.hidden = corrective;
+  if (saveButton) saveButton.hidden = corrective;
+  setText("#goal-dialog-title", corrective ? "Corrective Codex goal" : "Create Codex goal");
   if (maintenanceButton) {
     maintenanceButton.classList.toggle("goal-type-selected", maintenance);
     maintenanceButton.setAttribute("aria-checked", String(maintenance));
@@ -2360,12 +2514,15 @@ function renderGoalBuilder() {
     expansionButton.classList.toggle("goal-type-selected", !maintenance);
     expansionButton.setAttribute("aria-checked", String(!maintenance));
   }
-  if (expansionField) expansionField.hidden = maintenance;
-  setText("#goal-target-label", maintenance ? "Maintenance goal" : "Expansion goal");
-  setText("#goal-objective", preview?.objective || (maintenance ? "Generating maintenance goal..." : "Describe the capability to generate the goal."));
+  if (expansionField) expansionField.hidden = draft.goalType !== "expansion";
+  setText("#goal-target-label", corrective ? "Corrective goal" : maintenance ? "Maintenance goal" : "Expansion goal");
+  setText(
+    "#goal-objective",
+    preview?.objective || (maintenance ? "Generating maintenance goal..." : "Describe the capability to generate the goal."),
+  );
   const grade = maintenance && preview?.source_grade && preview?.target_grade
     ? `${preview.source_grade} to ${preview.target_grade}`
-    : maintenance ? "Next step" : "New capability";
+    : corrective ? `Correction ${preview?.correction_index || 1}` : maintenance ? "Next step" : "New capability";
   setText("#goal-grade-change", grade);
   setText(
     "#goal-preview",
@@ -2377,7 +2534,7 @@ function renderGoalBuilder() {
     if (button) button.disabled = !ready;
   });
   const reviewButton = $("#goal-review-button");
-  if (reviewButton) reviewButton.hidden = !draft.saved;
+  if (reviewButton) reviewButton.hidden = true;
   if (draft.saved) {
     setText("#goal-dialog-status", `Saved locally as ${draft.saved.goal_id}.`);
   }
@@ -2474,14 +2631,28 @@ async function openGoalInCodex() {
 
 async function reviewCompletedGoal() {
   const goal = await ensureGoalSaved();
+  await reviewGoalById(goal.goal_id);
+}
+
+async function reviewGoalById(goalId) {
+  const goal = state.goals.find((item) => item.goal_id === goalId);
+  if (!goal || goal.lifecycle_status !== "ready-for-review") {
+    throw new Error("This goal does not have a valid Codex receipt ready for review.");
+  }
   const taskInput = $("#simple-task-input");
   if (taskInput) {
     taskInput.value = goal.review_prompt;
     taskInput.dispatchEvent(new Event("input", { bubbles: true }));
   }
+  state.activeReviewGoalId = goal.goal_id;
   $("#goal-dialog")?.close();
   revealSection("mission-home", { instant: true });
-  await runSimpleMission();
+  try {
+    await runSimpleMission();
+  } catch (error) {
+    state.activeReviewGoalId = null;
+    throw error;
+  }
 }
 
 function selectGoalType(goalType) {
@@ -2509,6 +2680,23 @@ function clearSimplePoll() {
   state.simplePollTimer = null;
 }
 
+async function recordGoalReview(goalId, packetId, report) {
+  const response = await fetch(`/api/goals/${encodeURIComponent(goalId)}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      repo: $("#repo-input").value || state.repo,
+      report,
+      source_packet_id: packetId,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) throw new Error(payload.error || "Could not record the goal review.");
+  state.goals = payload.goals || state.goals;
+  renderGoalHistory();
+  return payload.review;
+}
+
 async function applySimpleRunnerState(packetId, run) {
   const status = String(run?.status || "failed");
   if (["starting", "running", "cancelling"].includes(status)) {
@@ -2527,7 +2715,21 @@ async function applySimpleRunnerState(packetId, run) {
     cancelled: ["Job stopped", run.summary || "The local job was stopped."],
     interrupted: ["Job interrupted", run.summary || "The local process ended unexpectedly."],
   };
-  const [title, body] = messages[status] || ["The job stopped", run?.summary || "No final runner state was returned."];
+  let [title, body] = messages[status] || ["The job stopped", run?.summary || "No final runner state was returned."];
+  if (state.activeReviewGoalId) {
+    const goalId = state.activeReviewGoalId;
+    state.activeReviewGoalId = null;
+    if (status === "succeeded" && run?.last_message) {
+      try {
+        const review = await recordGoalReview(goalId, packetId, run.last_message);
+        title = review.verdict === "complete" ? "Goal review complete" : "Goal needs a corrective pass";
+        body = review.summary || "The review was recorded in local goal history.";
+      } catch (error) {
+        title = "Review finished, but was not recorded";
+        body = error.message;
+      }
+    }
+  }
   setSimpleRunState(status, title, body, {
     packetId,
     result: run?.last_message || "",
@@ -2626,6 +2828,7 @@ async function runSimpleMission() {
   });
 
   if (packet.gate_run?.blocked || packet.status === "blocked") {
+    state.activeReviewGoalId = null;
     setSimpleRunState("blocked", "Hamiltonian stopped this job", packet.gate_run?.next_action || "A safety check blocked it.", {
       packetId: packet.packet_id,
     });
@@ -2634,6 +2837,7 @@ async function runSimpleMission() {
   }
 
   if (!packet.runner_plan?.launch_supported) {
+    state.activeReviewGoalId = null;
     setSimpleRunState(
       "unavailable",
       "Job saved, but Codex could not start",
@@ -2667,6 +2871,7 @@ function renderMissionHome(data) {
   setText("#simple-task-count", `${$("#simple-task-input")?.value.length || 0}/600`);
   renderSimpleRunExperience();
   renderHomeRecentPackets(data);
+  renderGoalHistory();
 }
 
 function detailRow(label, value) {
@@ -4622,15 +4827,25 @@ function render(data) {
 async function load(repo) {
   const params = new URLSearchParams();
   if (repo) params.set("repo", repo);
-  const [response, healthResponse] = await Promise.all([
+  window.clearTimeout(state.goalHistoryTimer);
+  const [response, healthResponse, goalsResponse] = await Promise.all([
     fetch(`/api/state?${params.toString()}`),
     fetch("/api/health"),
+    fetch(`/api/goals?${params.toString()}`),
   ]);
-  const [data, health] = await Promise.all([response.json(), healthResponse.json()]);
+  const [data, health, goalsPayload] = await Promise.all([
+    response.json(),
+    healthResponse.json(),
+    goalsResponse.json(),
+  ]);
   if (!response.ok || data.error) throw new Error(data.error || "State request failed");
   if (healthResponse.ok && !health.error) state.appInfo = health;
+  state.goals = goalsResponse.ok && !goalsPayload.error ? goalsPayload.goals || [] : [];
   state.repo = data.repo;
   render(data);
+  state.goalHistoryTimer = window.setTimeout(() => {
+    refreshGoalHistory().catch((error) => setText("#goal-history-summary", error.message));
+  }, 10000);
 }
 
 async function loadPacketDetail(packetId) {

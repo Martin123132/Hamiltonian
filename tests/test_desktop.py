@@ -24,6 +24,7 @@ from hamiltonian.desktop import (
     run_desktop,
     write_desktop_crash_report,
 )
+from hamiltonian.goals import create_goal_package
 from hamiltonian.server import create_cockpit_server
 
 
@@ -116,6 +117,12 @@ def test_recent_workspaces_are_local_deduplicated_and_drop_missing_paths(tmp_pat
             "path": str(first.resolve()),
             "name": "first",
             "last_opened": recent[0]["last_opened"],
+            "goal_summary": {
+                "total": 0,
+                "ready_for_review": 0,
+                "needs_correction": 0,
+                "complete": 0,
+            },
         }
     ]
 
@@ -134,6 +141,37 @@ def test_launcher_renders_recent_workspace_without_unescaped_html(tmp_path: Path
     assert f"Version {__version__}" in html
     assert str(repo.resolve()).replace("\\", "\\\\") in html
     assert "__HAMILTONIAN_RECENTS__" not in html
+
+
+def test_launcher_surfaces_workspace_goal_ready_for_review(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    goal = create_goal_package(repo, "maintenance", "Repository health: **B**")
+    receipt = repo / ".hamiltonian" / "goals" / goal.goal_id / "return.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "goal_id": goal.goal_id,
+                "status": "ready",
+                "summary": "Done",
+                "files_changed": [],
+                "tests": [],
+                "branch": "main",
+                "commit": "abc",
+                "pushed": False,
+                "remaining_work": "None",
+            }
+        ),
+        encoding="utf-8",
+    )
+    remember_workspace(data_dir, repo)
+
+    html = desktop_launcher_html(data_dir)
+
+    assert '"ready_for_review": 1' in html
+    assert "goals ready for review" in html
 
 
 def test_desktop_session_locks_to_first_activated_workspace(tmp_path: Path) -> None:

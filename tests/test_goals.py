@@ -12,10 +12,14 @@ import pytest
 
 from hamiltonian.goals import (
     GOAL_SCHEMA,
+    create_corrective_goal,
     create_goal_package,
+    goal_workspace_summary,
+    inspect_goal_receipt,
     list_goal_packages,
     open_codex_workspace,
     preview_goal_package,
+    save_goal_review,
 )
 from hamiltonian.runners import AdapterProbe
 from hamiltonian.server import CockpitHandler
@@ -42,6 +46,26 @@ REPORT = """Repository health: **B — strong core.**
 | Medium | Windows release drift comparison is incorrect. |
 | Medium | Schema validation ignores maxItems. |
 """
+
+
+def write_receipt(repo: Path, goal_id: str, summary: str = "Completed the requested work.") -> None:
+    target = repo / ".hamiltonian" / "goals" / goal_id / "return.json"
+    target.write_text(
+        json.dumps(
+            {
+                "goal_id": goal_id,
+                "status": "ready-for-review",
+                "summary": summary,
+                "files_changed": ["src/example.py"],
+                "tests": ["pytest: passed"],
+                "branch": "main",
+                "commit": "abc123",
+                "pushed": False,
+                "remaining_work": "None",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_maintenance_goal_raises_one_grade_and_persists_local_contract(tmp_path: Path) -> None:
@@ -110,6 +134,72 @@ def test_goal_preview_handles_uncommitted_repo_and_bounds_saved_report(tmp_path:
     saved_report = Path(package.source_report_path).read_text(encoding="utf-8")
     assert saved_report.endswith("[Report truncated by Hamiltonian.]\n")
     assert len(saved_report) < len(oversized_report)
+
+
+def test_receipt_review_and_corrective_goal_lifecycle(tmp_path: Path) -> None:
+    init_git_repo(tmp_path)
+    original = create_goal_package(tmp_path, "maintenance", REPORT)
+
+    assert list_goal_packages(tmp_path)[0]["lifecycle_status"] == "awaiting-codex"
+    write_receipt(tmp_path, original.goal_id, "Fixed the trust boundary at D:\\private\\repo.")
+    receipt = inspect_goal_receipt(tmp_path, original.goal_id)
+    assert receipt["valid"] is True
+    assert "D:\\private" not in receipt["summary"]
+    assert list_goal_packages(tmp_path)[0]["lifecycle_status"] == "ready-for-review"
+
+    review = save_goal_review(
+        tmp_path,
+        original.goal_id,
+        "## Verdict\n\n**Goal incomplete.**\n\nMaintenance health grade: **B**\n\nOne trust defect remains.",
+        source_packet_id="review-packet",
+    )
+    assert review["verdict"] == "incomplete"
+    assert review["assigned_grade"] == "B"
+    assert review["summary"] == "Goal incomplete."
+    assert list_goal_packages(tmp_path)[0]["lifecycle_status"] == "needs-correction"
+
+    corrective = create_corrective_goal(tmp_path, original.goal_id)
+    assert corrective.goal_type == "corrective"
+    assert corrective.parent_goal_id == original.goal_id
+    assert corrective.lineage_root_id == original.goal_id
+    assert corrective.correction_index == 1
+    goals = {goal["goal_id"]: goal for goal in list_goal_packages(tmp_path)}
+    assert goals[original.goal_id]["lifecycle_status"] == "correction-in-progress"
+    assert goals[original.goal_id]["child_goal_ids"] == [corrective.goal_id]
+
+    write_receipt(tmp_path, corrective.goal_id)
+    save_goal_review(
+        tmp_path,
+        corrective.goal_id,
+        "## Verdict\n\n**Goal complete.**\n\nMaintenance health grade: **B+**",
+    )
+    goals = {goal["goal_id"]: goal for goal in list_goal_packages(tmp_path)}
+    assert goals[corrective.goal_id]["lifecycle_status"] == "complete"
+    assert goals[original.goal_id]["lifecycle_status"] == "corrected"
+    assert goals[corrective.goal_id]["grade_movement"] == "B to B+"
+    assert goal_workspace_summary(tmp_path) == {
+        "total": 2,
+        "ready_for_review": 0,
+        "needs_correction": 0,
+        "complete": 2,
+    }
+
+    with pytest.raises(ValueError, match="already has a corrective"):
+        create_corrective_goal(tmp_path, original.goal_id)
+
+
+def test_invalid_receipt_is_reported_without_exposing_payload(tmp_path: Path) -> None:
+    init_git_repo(tmp_path)
+    package = create_goal_package(tmp_path, "maintenance", REPORT)
+    target = tmp_path / ".hamiltonian" / "goals" / package.goal_id / "return.json"
+    target.write_text('{"goal_id": "wrong", "secret": "do-not-display"}', encoding="utf-8")
+
+    receipt = inspect_goal_receipt(tmp_path, package.goal_id)
+
+    assert receipt["status"] == "invalid"
+    assert receipt["valid"] is False
+    assert "do-not-display" not in json.dumps(receipt)
+    assert list_goal_packages(tmp_path)[0]["lifecycle_status"] == "receipt-invalid"
 
 
 def test_open_codex_workspace_uses_app_command_without_remote_execution(tmp_path: Path, monkeypatch) -> None:
@@ -203,6 +293,39 @@ def test_goal_preview_save_and_open_api(tmp_path: Path, monkeypatch) -> None:
         with urlopen(f"{base_url}/api/goals?{query}", timeout=20) as response:
             goals = json.loads(response.read().decode("utf-8"))["goals"]
         assert goals[0]["goal_id"] == preview["goal_id"]
+
+        write_receipt(tmp_path, saved["goal_id"])
+        with urlopen(f"{base_url}/api/goals?{query}", timeout=20) as response:
+            goals = json.loads(response.read().decode("utf-8"))["goals"]
+        assert goals[0]["lifecycle_status"] == "ready-for-review"
+
+        review_request = Request(
+            f"{base_url}/api/goals/{saved['goal_id']}/review",
+            data=json.dumps(
+                {
+                    "repo": str(tmp_path),
+                    "report": "## Verdict\n\n**Goal incomplete.**\n\nMaintenance health grade: **B**",
+                    "source_packet_id": "review-api",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(review_request, timeout=20) as response:
+            reviewed = json.loads(response.read().decode("utf-8"))
+        assert reviewed["review"]["verdict"] == "incomplete"
+        assert reviewed["goals"][0]["lifecycle_status"] == "needs-correction"
+
+        corrective_request = Request(
+            f"{base_url}/api/goals/{saved['goal_id']}/corrective",
+            data=json.dumps({"repo": str(tmp_path)}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(corrective_request, timeout=20) as response:
+            corrective = json.loads(response.read().decode("utf-8"))["goal"]
+        assert corrective["goal_type"] == "corrective"
+        assert corrective["parent_goal_id"] == saved["goal_id"]
 
         open_request = Request(
             f"{base_url}/api/codex/open",

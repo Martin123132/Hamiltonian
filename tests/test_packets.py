@@ -950,6 +950,9 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="simple-step-done"' in html
     assert "<span>[]</span>" not in html
     assert 'id="home-recent-packets"' in html
+    assert 'id="home-goal-history"' in html
+    assert 'id="goal-history-list"' in html
+    assert 'id="goal-history-summary"' in html
     assert 'data-page-target="create"' in html
     assert 'data-pages="create"' in html
     assert 'id="create-back-home"' in html
@@ -1138,6 +1141,11 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function ensureGoalSaved" in app
     assert "function openGoalInCodex" in app
     assert "function reviewCompletedGoal" in app
+    assert "function renderGoalHistory" in app
+    assert "function refreshGoalHistory" in app
+    assert "function reviewGoalById" in app
+    assert "function createCorrectiveGoal" in app
+    assert "function recordGoalReview" in app
     assert "AgentLedger evidence is represented locally only." in app
     assert "route-strength" in app
     assert "route-boundary" in app
@@ -1338,3 +1346,6 @@ def test_static_ui_targets_packet_api() -> None:
     assert ".home-readiness-list" in styles
     assert ".home-evidence-option" in styles
     assert ".home-recent-packets" in styles
+    assert ".simple-goal-history" in styles
+    assert ".goal-history-row" in styles
+    assert ".goal-history-badge" in styles

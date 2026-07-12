@@ -227,7 +227,7 @@ const journeyExpression = String.raw`
   await waitFor(() => q('#goal-dialog')?.open, 'Codex goal dialog');
   await waitFor(() => q('[data-testid="goal-preview"]')?.textContent.includes('B to B+'), 'maintenance grade target');
   click('#goal-save-button');
-  await waitFor(() => !q('#goal-review-button')?.hidden, 'saved maintenance goal');
+  await waitFor(() => q('#goal-dialog-status')?.textContent.includes('Saved locally'), 'saved maintenance goal');
   const goalsResponse = await fetch('/api/goals?repo=' + encodeURIComponent(repo));
   const goalsPayload = await goalsResponse.json();
   if (!goalsResponse.ok || !goalsPayload.goals?.length) throw new Error('Saved maintenance goal missing from API');
@@ -240,6 +240,7 @@ const journeyExpression = String.raw`
     'expansion goal preview',
   );
   if (q('#goal-open-codex-button')?.disabled) throw new Error('Open in Codex should be available for a valid goal');
+  click('#goal-dialog-close');
 
   return {
     ok: true,
@@ -257,6 +258,58 @@ const journeyExpression = String.raw`
     maintenance_goal_id: maintenanceGoalId,
     maintenance_target: 'B+',
     expansion_preview: true,
+  };
+})()
+`;
+
+
+const goalLifecycleExpression = String.raw`
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitFor = async (check, label, timeout = 30000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const value = check();
+      if (value) return value;
+      await sleep(100);
+    }
+    throw new Error('Timed out waiting for ' + label);
+  };
+  await refreshGoalHistory();
+  const readyRow = await waitFor(
+    () => [...document.querySelectorAll('[data-testid="goal-history-row"]')].find(
+      (row) => row.querySelector('.goal-history-badge')?.dataset.status === 'ready-for-review',
+    ),
+    'review-ready goal history row',
+  );
+  const reviewButton = [...readyRow.querySelectorAll('button')].find((button) => button.textContent === 'Review now');
+  if (!reviewButton) throw new Error('Review action was not shown for the valid receipt');
+  reviewButton.click();
+  await waitFor(() => document.querySelector('[data-testid="simple-status"]')?.dataset.status === 'succeeded', 'goal review completion');
+  await refreshGoalHistory();
+  const correctionRow = await waitFor(
+    () => [...document.querySelectorAll('[data-testid="goal-history-row"]')].find(
+      (row) => row.querySelector('.goal-history-badge')?.dataset.status === 'needs-correction',
+    ),
+    'incomplete review status',
+  );
+  const correctiveButton = [...correctionRow.querySelectorAll('button')].find(
+    (button) => button.textContent === 'Create corrective goal',
+  );
+  if (!correctiveButton) throw new Error('Corrective goal action was not shown');
+  correctiveButton.click();
+  await waitFor(() => document.querySelector('#goal-dialog')?.open, 'corrective goal dialog');
+  await waitFor(() => document.querySelector('#goal-target-label')?.textContent === 'Corrective goal', 'corrective goal preview');
+  const repo = document.querySelector('#repo-input').value;
+  const response = await fetch('/api/goals?repo=' + encodeURIComponent(repo));
+  const payload = await response.json();
+  const corrective = payload.goals.find((goal) => goal.goal_type === 'corrective');
+  if (!corrective?.parent_goal_id) throw new Error('Corrective goal lineage was not persisted');
+  return {
+    review_status: 'incomplete',
+    corrective_goal_id: corrective.goal_id,
+    corrective_parent_goal_id: corrective.parent_goal_id,
+    goal_history_rows: document.querySelectorAll('[data-testid="goal-history-row"]').length,
   };
 })()
 `;
@@ -299,9 +352,18 @@ if "WAIT_FOR_CANCEL" in prompt:
     time.sleep(30)
 if "--output-last-message" in sys.argv:
     output_index = sys.argv.index("--output-last-message") + 1
-    Path(sys.argv[output_index]).write_text("""Repository health: **B - strong core.**
+    message = """Repository health: **B - strong core.**
 
-Medium finding: add focused regression coverage.""", encoding="utf-8")
+Medium finding: add focused regression coverage."""
+    if "Review completed Codex goal" in prompt:
+        message = """## Verdict
+
+**Goal incomplete.**
+
+Maintenance health grade: **B**
+
+One focused trust regression remains."""
+    Path(sys.argv[output_index]).write_text(message, encoding="utf-8")
 emit({"type": "item.completed", "item": {"id": "item-1", "type": "agent_message", "text": "private", "status": "completed"}})
 emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 60, "output_tokens": 20, "reasoning_output_tokens": 4}})
 `,
@@ -362,6 +424,27 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
     await evaluate(client, "new Promise((resolve) => { if (document.readyState === 'complete') resolve(true); else window.addEventListener('load', () => resolve(true), { once: true }); })");
 
     const result = await evaluate(client, journeyExpression);
+    const receiptPath = path.join(workspace, ".hamiltonian", "goals", result.maintenance_goal_id, "return.json");
+    await writeFile(
+      receiptPath,
+      JSON.stringify(
+        {
+          goal_id: result.maintenance_goal_id,
+          status: "ready-for-review",
+          summary: "Browser QA work completed.",
+          files_changed: ["src/example.py"],
+          tests: ["browser smoke: passed"],
+          branch: "main",
+          commit: "browser-qa",
+          pushed: false,
+          remaining_work: "Review in Hamiltonian.",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const goalLifecycle = await evaluate(client, goalLifecycleExpression);
     const desktop = await client.send("Page.captureScreenshot", {
       format: "jpeg",
       quality: 88,
@@ -404,6 +487,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
           name: "The-Marked-Bench-Public",
           path: "D:\\Codex\\Projects\\The-Marked-Bench-Public",
           last_opened: "2026-07-11T00:00:00Z",
+          goal_summary: { total: 2, ready_for_review: 1, needs_correction: 0, complete: 1 },
         },
         {
           name: "Tokometer",
@@ -411,7 +495,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    );
+    ).replace("__HAMILTONIAN_VERSION__", "browser-qa");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -431,7 +515,7 @@ emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tok
     const launcherPath = path.join(qaRoot, "hamiltonian-desktop-launcher.jpg");
     await writeFile(launcherPath, Buffer.from(launcher.data, "base64"));
 
-    console.log(JSON.stringify({ ...result, screenshots: { desktop: desktopPath, mobile: mobilePath, launcher: launcherPath } }, null, 2));
+    console.log(JSON.stringify({ ...result, ...goalLifecycle, screenshots: { desktop: desktopPath, mobile: mobilePath, launcher: launcherPath } }, null, 2));
     await client.send("Browser.close").catch(() => {});
   } catch (error) {
     if (serverOutput.trim()) console.error(serverOutput.trim());

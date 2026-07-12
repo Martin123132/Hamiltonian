@@ -11,10 +11,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import __version__
 from .core import ensure_repo, is_git_repo
 from .goals import (
+    create_corrective_goal,
     create_goal_package,
     list_goal_packages,
     open_codex_workspace,
     preview_goal_package,
+    save_goal_review,
 )
 from .integrations import detect_integrations
 from .packets import (
@@ -126,6 +128,41 @@ class CockpitHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/goals/") and parsed.path.endswith("/review"):
+            goal_id = unquote(
+                parsed.path.removeprefix("/api/goals/").removesuffix("/review")
+            ).strip("/")
+            try:
+                payload = self._read_json()
+                repo = self._requested_repo(str(payload.get("repo") or str(self.repo)))
+                review = save_goal_review(
+                    repo_path=repo,
+                    goal_id=goal_id,
+                    report=str(payload.get("report") or ""),
+                    source_packet_id=str(payload.get("source_packet_id") or "") or None,
+                )
+                self._write_json({"review": review, "goals": list_goal_packages(repo)})
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path.startswith("/api/goals/") and parsed.path.endswith("/corrective"):
+            goal_id = unquote(
+                parsed.path.removeprefix("/api/goals/").removesuffix("/corrective")
+            ).strip("/")
+            try:
+                payload = self._read_json()
+                package = create_corrective_goal(
+                    self._requested_repo(str(payload.get("repo") or str(self.repo))),
+                    goal_id,
+                )
+                self._write_json({"goal": packet_to_dict(package)}, status=HTTPStatus.CREATED)
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/goals/preview":
             try:
                 payload = self._read_json()
@@ -136,6 +173,7 @@ class CockpitHandler(SimpleHTTPRequestHandler):
                     source_packet_id=str(payload.get("source_packet_id") or "") or None,
                     expansion_request=str(payload.get("expansion_request") or "") or None,
                     goal_id=str(payload.get("goal_id") or "") or None,
+                    parent_goal_id=str(payload.get("parent_goal_id") or "") or None,
                 )
                 self._write_json({"goal": packet_to_dict(package)})
             except ValueError as exc:
@@ -153,6 +191,7 @@ class CockpitHandler(SimpleHTTPRequestHandler):
                     source_packet_id=str(payload.get("source_packet_id") or "") or None,
                     expansion_request=str(payload.get("expansion_request") or "") or None,
                     goal_id=str(payload.get("goal_id") or "") or None,
+                    parent_goal_id=str(payload.get("parent_goal_id") or "") or None,
                 )
                 self._write_json({"goal": packet_to_dict(package)}, status=HTTPStatus.CREATED)
             except ValueError as exc:
