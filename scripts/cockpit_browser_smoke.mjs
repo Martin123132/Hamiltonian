@@ -13,7 +13,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const qaRoot = path.resolve(
   process.env.HAMILTONIAN_QA_ROOT ||
-    (process.platform === "win32" ? "D:\\Codex\\Temp\\Hamiltonian" : path.join(projectRoot, ".hamiltonian", "qa")),
+    (process.platform === "win32" ? "D:\\Hamiltonian\\Temp" : path.join(projectRoot, ".hamiltonian", "qa")),
 );
 
 
@@ -948,7 +948,7 @@ print(json.dumps({
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.7.0");
+    ).replace("__HAMILTONIAN_VERSION__", "0.8.0");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,

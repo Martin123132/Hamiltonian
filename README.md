@@ -7,6 +7,13 @@ result you want, run a bounded local check, optionally compare a second agent,
 hand the resulting goal to the correct Codex project, and bring the completion
 receipt back for independent review.
 
+> **Public alpha and licence:** Hamiltonian is public source-available software,
+> not open-source software. Personal, educational, research, hobby, and other
+> non-commercial use is permitted under the
+> [PolyForm Noncommercial License 1.0.0](LICENSE). Paid products, hosted or
+> managed services, enterprise tools, and commercial AI systems require a
+> separate written licence from TWO HANDS NETWORK LTD. See [NOTICE.md](NOTICE.md).
+
 ![Hamiltonian Mission Home](docs/images/mission-home-desktop.jpg)
 
 The normal path stays deliberately simple:
@@ -16,9 +23,9 @@ The normal path stays deliberately simple:
 3. Turn a useful result into a Maintenance or Expansion goal.
 4. Let Hamiltonian detect the return receipt and review the completed work.
 
-All application state stays in the selected repository or D-drive data
-directory. The cockpit binds only to `127.0.0.1`, remote command execution is
-off, and evidence remains optional unless the operator selects it.
+All application state stays in the selected repository or operator-selected
+local data directory. The cockpit binds only to `127.0.0.1`, remote command
+execution is off, and evidence remains optional unless the operator selects it.
 
 ## How It Works
 
@@ -102,7 +109,17 @@ windows.
   </tr>
 </table>
 
-## Version 0.7.0
+## Version 0.8.0
+
+- Public source-available governance under the established TWO HANDS NETWORK LTD PolyForm Noncommercial terms.
+- Plain-language commercial-use notice and contribution relicensing boundary.
+- Security policy, private-first vulnerability reporting, structured issue forms, and pull request safety checklist.
+- Generic D-drive-first public paths with portable fallback for systems without a D drive.
+- Deterministic .NET ZIP packaging replacing the PowerShell compressor that could stall locally.
+- Package metadata linking the canonical repository, issue tracker, and licence.
+- Explicit unsigned Windows alpha-package warning and source-first installation guidance.
+
+### Included From 0.7.0
 
 - First callable OpenClaw lane through the official embedded one-shot CLI boundary.
 - Forced `--local` transport with post-run verification that the result came from the embedded runtime.
@@ -170,6 +187,8 @@ and William Rowan Hamilton's language of state, trajectories, and action.
 ## Quick Start
 
 ```powershell
+git clone https://github.com/Martin123132/Hamiltonian.git
+cd Hamiltonian
 python -m pip install -e .
 hamiltonian cockpit --repo .
 python .\scripts\run-cockpit.py --repo .
@@ -197,7 +216,7 @@ WebView2 window:
 
 ```powershell
 python -m pip install -e ".[desktop]"
-hamiltonian desktop --repo D:\Codex\Projects\YourProject --data-dir D:\Codex\Data\Hamiltonian
+hamiltonian desktop --repo D:\Projects\YourProject --data-dir D:\Hamiltonian\Data
 ```
 
 Omit `--repo` to start on the desktop workspace launcher. It lists up to eight
@@ -210,7 +229,8 @@ on `127.0.0.1`, locks every API request to the repository chosen for that
 window, keeps WebView storage in the selected data directory, and stops the
 local server when the window closes. Remote execution remains off.
 
-Build a portable Windows application entirely under `D:` with:
+Build a portable Windows application under `D:\Hamiltonian` when a D drive is
+available, with a local application-data fallback on systems without one:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-app.ps1
@@ -219,30 +239,36 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-app.ps1
 The default executable is written to:
 
 ```text
-D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\Hamiltonian.exe
+D:\Hamiltonian\Builds\dist\Hamiltonian\Hamiltonian.exe
 ```
 
 The build also writes:
 
 ```text
-D:\Codex\Builds\Hamiltonian\Hamiltonian.lnk
-D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\build-info.json
-D:\Codex\Builds\Hamiltonian\dist\Hamiltonian\SHA256SUMS.txt
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.7.0.zip
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.7.0.release.json
-D:\Codex\Builds\Hamiltonian\Hamiltonian-windows-x64-0.7.0.sha256
+D:\Hamiltonian\Builds\Hamiltonian.lnk
+D:\Hamiltonian\Builds\dist\Hamiltonian\build-info.json
+D:\Hamiltonian\Builds\dist\Hamiltonian\SHA256SUMS.txt
+D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.8.0.zip
+D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.8.0.release.json
+D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.8.0.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
-`D:\Codex\Data\Hamiltonian`. The build manifest and checksum provide the
+`D:\Hamiltonian\Data`. The build manifest and checksum provide the
 versioned verification boundary needed for a future manual updater. No remote
-update check or background update service is enabled.
+update check or background update service is enabled. The portable ZIP also
+contains `LICENSE`, `NOTICE.md`, and this README.
 
 Every pull request now runs the complete test matrix, the real Edge browser
 journey, and a Windows desktop package build. Tag pushes build reviewable
 workflow artifacts but do not publish them. The separate **Package Release**
-workflow only attaches the unsigned ZIP to a private GitHub release when it is
+workflow only attaches the unsigned ZIP to a GitHub release when it is
 started manually with `publish` explicitly enabled.
+
+The Windows alpha package is currently unsigned and may trigger Windows
+SmartScreen or antivirus reputation warnings. Verify the published SHA-256 and
+release manifest before use. Installing from reviewed source is the primary
+trust path until code signing is available.
 
 The packaged app uses a `data` directory beside the executable unless
 `HAMILTONIAN_HOME` or `--data-dir` is supplied. It does not use `%APPDATA%` for
@@ -467,7 +493,7 @@ the Codex, Hermes, and OpenClaw commands, so it uses no model credits or credent
 packets are removed after the run. The
 sanitized Mission Home, completed check, goal review, corrective lineage,
 launcher, and mobile captures are written under
-`D:\Codex\Temp\Hamiltonian` by default.
+`D:\Hamiltonian\Temp` by default.
 
 The lower-level `run` command still writes:
 
@@ -502,7 +528,7 @@ today while the full product stack is assembled.
 
 ## Market Wedge
 
-OpenClaw and Hermes fight over being the agent. Hamiltonian owns the layer above
+OpenClaw and Hermes compete to be the agent. Hamiltonian owns the layer above
 the agent:
 
 ```text
@@ -513,3 +539,13 @@ The cockpit now offers Hermes as a bounded agent lane and OpenClaw as an even
 narrower tool-less embedded lane. The market is not
 "which agent is coolest"; the market is who operators trust to route, gate,
 verify, and prove agent work across all of them.
+
+## Licence And Commercial Use
+
+Hamiltonian is public source-available software under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Non-commercial personal,
+research, educational, hobby, and public-interest use is permitted. Commercial
+products, paid services, managed platforms, enterprise tools, commercial AI
+systems, and resale require a separate written licence from TWO HANDS NETWORK
+LTD. See [NOTICE.md](NOTICE.md) for the plain-language boundary and
+[CONTRIBUTING.md](CONTRIBUTING.md) before submitting material.
