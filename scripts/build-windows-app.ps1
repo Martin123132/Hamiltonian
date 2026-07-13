@@ -1,11 +1,24 @@
 param(
-    [string]$OutputRoot = "D:\Codex\Builds\Hamiltonian",
-    [string]$DataRoot = "D:\Codex\Data\Hamiltonian",
+    [string]$OutputRoot = "",
+    [string]$DataRoot = "",
     [switch]$SkipInstall
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+$DefaultRoot = if (Test-Path "D:\") {
+    "D:\Hamiltonian"
+} elseif ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "Hamiltonian"
+} else {
+    Join-Path $ProjectRoot ".hamiltonian-build"
+}
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path $DefaultRoot "Builds"
+}
+if ([string]::IsNullOrWhiteSpace($DataRoot)) {
+    $DataRoot = Join-Path $DefaultRoot "Data"
+}
 $OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 $EnvironmentRoot = Join-Path $OutputRoot "environment"
 $TempRoot = Join-Path $OutputRoot "temp"
@@ -95,6 +108,15 @@ if (-not (Test-Path $Executable)) {
     throw "Hamiltonian desktop build did not produce $Executable"
 }
 
+$DistributionRoot = Split-Path -Parent $Executable
+foreach ($RequiredFile in @("LICENSE", "NOTICE.md", "README.md")) {
+    $SourceFile = Join-Path $ProjectRoot $RequiredFile
+    if (-not (Test-Path -LiteralPath $SourceFile)) {
+        throw "Required distribution file is missing: $RequiredFile"
+    }
+    Copy-Item -LiteralPath $SourceFile -Destination (Join-Path $DistributionRoot $RequiredFile) -Force
+}
+
 $Version = (& $Python -c "import hamiltonian; print(hamiltonian.__version__)").Trim()
 $SourceCommit = (& git -C $ProjectRoot rev-parse HEAD 2>$null | Select-Object -First 1)
 if (-not $SourceCommit) {
@@ -117,6 +139,10 @@ $BuildInfo = [ordered]@{
     executable = "Hamiltonian.exe"
     executable_size = $ExecutableInfo.Length
     executable_sha256 = $ExecutableHash
+    source_available = $true
+    license = "PolyForm-Noncommercial-1.0.0"
+    license_file = "LICENSE"
+    notice_file = "NOTICE.md"
     update_policy = "manual-local-package"
     remote_update = $false
     signed = $false
@@ -138,7 +164,13 @@ $ArchivePath = Join-Path $OutputRoot $ArchiveName
 if (Test-Path $ArchivePath) {
     Remove-Item -LiteralPath $ArchivePath -Force
 }
-Compress-Archive -Path (Join-Path $ExecutableInfo.DirectoryName "*") -DestinationPath $ArchivePath -CompressionLevel Optimal
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $ExecutableInfo.DirectoryName,
+    $ArchivePath,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $false
+)
 $ArchiveInfo = Get-Item $ArchivePath
 $ArchiveHash = (Get-FileHash $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $ReleaseManifestName = "Hamiltonian-windows-x64-$Version.release.json"
@@ -155,6 +187,10 @@ $ReleaseManifest = [ordered]@{
     artifact_size = $ArchiveInfo.Length
     artifact_sha256 = $ArchiveHash
     package = "windows-portable-zip"
+    source_available = $true
+    license = "PolyForm-Noncommercial-1.0.0"
+    license_file = "LICENSE"
+    notice_file = "NOTICE.md"
     signed = $false
     remote_update = $false
 }

@@ -48,7 +48,8 @@ def select_workspace(initial_dir: Path | None = None) -> Path | None:
         raise RuntimeError("The native repository picker is unavailable.") from exc
 
     if initial_dir is None:
-        preferred = Path("D:/Codex/Projects")
+        configured = os.environ.get("HAMILTONIAN_PROJECTS_HOME", "").strip()
+        preferred = Path(configured).expanduser() if configured else Path("D:/Projects")
         initial_dir = preferred if preferred.exists() else Path.cwd()
     root = tk.Tk()
     root.withdraw()
@@ -75,7 +76,7 @@ def desktop_data_dir(repo: Path | None, requested: Path | None = None) -> Path:
     elif repo is not None:
         target = repo / ".hamiltonian" / "desktop"
     else:
-        preferred = Path("D:/Codex/Data/Hamiltonian")
+        preferred = Path("D:/Hamiltonian/Data")
         target = preferred if preferred.drive and Path(f"{preferred.drive}/").exists() else Path.cwd() / ".hamiltonian" / "desktop"
     resolved = target.expanduser().resolve()
     resolved.mkdir(parents=True, exist_ok=True)

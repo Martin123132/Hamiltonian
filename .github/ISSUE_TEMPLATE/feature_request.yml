@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a bounded improvement to Hamiltonian.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Operator problem
+      description: What is difficult or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the result without prescribing private implementation details.
+    validations:
+      required: true
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Expected boundary
+      options:
+        - Local-only UI or workflow
+        - Existing adapter
+        - New adapter proposal
+        - Evidence or review
+        - Packaging or documentation
+    validations:
+      required: true
+  - type: checkboxes
+    id: commercial
+    attributes:
+      label: Submission terms
+      options:
+        - label: I have read CONTRIBUTING.md and have not included private or commercially confidential material.
+          required: true

@@ -4,12 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hamiltonian"
-version = "0.7.0"
+version = "0.8.0"
 description = "Flight software for agentic systems."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Martin Ollett" }]
+license = { file = "LICENSE" }
+keywords = ["agents", "codex", "local-first", "orchestration", "evidence"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: Other/Proprietary License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Martin123132/Hamiltonian"
+Issues = "https://github.com/Martin123132/Hamiltonian/issues"
+License = "https://github.com/Martin123132/Hamiltonian/blob/master/LICENSE"
 
 [project.optional-dependencies]
 desktop = ["pywebview==6.2.1"]

@@ -109,6 +109,17 @@ jobs:
           if ($manifest.source_commit -ne $env:GITHUB_SHA) { throw "Release source commit mismatch" }
           if ($manifest.source_dirty) { throw "CI release artifact came from a dirty worktree" }
           if ($manifest.signed) { throw "Unsigned prototype build unexpectedly claims signing" }
+          if ($manifest.license -ne "PolyForm-Noncommercial-1.0.0") { throw "Release license metadata mismatch" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($artifact)
+          try {
+            $entryNames = @($archive.Entries | ForEach-Object { $_.FullName })
+          } finally {
+            $archive.Dispose()
+          }
+          foreach ($required in @("LICENSE", "NOTICE.md", "README.md")) {
+            if ($required -notin $entryNames) { throw "Release archive is missing $required" }
+          }
       - name: Upload portable desktop package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
