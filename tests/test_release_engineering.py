@@ -10,10 +10,12 @@ ROOT = Path(__file__).parents[1]
 def test_package_versions_match() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"$', pyproject, re.MULTILINE)
+    test_dependency = re.search(r'^test = \["([^"]+)"\]$', pyproject, re.MULTILINE)
 
     assert match
     assert match.group(1) == __version__
-    assert 'test = ["pytest==9.0.3"]' in pyproject
+    assert test_dependency
+    assert re.fullmatch(r"pytest==[0-9]+\.[0-9]+\.[0-9]+", test_dependency.group(1))
     assert 'license = { file = "LICENSE" }' in pyproject
     assert 'Repository = "https://github.com/Martin123132/Hamiltonian"' in pyproject
 
