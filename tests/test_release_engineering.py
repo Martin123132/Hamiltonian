@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import tomllib
 
 from hamiltonian import __version__
 
@@ -9,11 +10,14 @@ ROOT = Path(__file__).parents[1]
 
 def test_package_versions_match() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    metadata = tomllib.loads(pyproject)
     match = re.search(r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"$', pyproject, re.MULTILINE)
+    test_dependencies = metadata["project"]["optional-dependencies"]["test"]
 
     assert match
     assert match.group(1) == __version__
-    assert 'test = ["pytest==9.0.3"]' in pyproject
+    assert len(test_dependencies) == 1
+    assert re.fullmatch(r"pytest==[0-9]+\.[0-9]+\.[0-9]+", test_dependencies[0])
     assert 'license = { file = "LICENSE" }' in pyproject
     assert 'Repository = "https://github.com/Martin123132/Hamiltonian"' in pyproject
 
