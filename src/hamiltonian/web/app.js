@@ -32,6 +32,7 @@ const state = {
   goalHistoryTimer: null,
   goalDraft: null,
   goalSource: null,
+  goalHandoffStage: "preview",
   goals: [],
   activeReviewGoalId: null,
   appInfo: null,
@@ -150,6 +151,11 @@ const PAGE_ALIASES = {
   mission: "map",
   "packet-detail-panel": "packets",
   "next-build": "advanced",
+};
+const FIRST_RUN_TASKS = {
+  health: "Perform a read-only health check of this repository. Report what is healthy, the highest-value confirmed problems, and the safest next maintenance step. Do not modify files.",
+  setup: "Check whether this repository currently works as documented. Inspect its setup, tests, build, and release boundaries without modifying files. Report confirmed failures and practical next steps.",
+  next: "Review this repository and recommend one bounded improvement that would make it more useful without weakening its current behavior. Do not modify files.",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -1613,6 +1619,27 @@ function renderAdvancedSettings(data) {
   renderAdvancedStaticSettings(data);
 }
 
+async function exportSanitizedDiagnostics() {
+  const button = $("#export-diagnostics-button");
+  if (button) button.disabled = true;
+  setText("#export-diagnostics-status", "Creating sanitized local diagnostics...");
+  try {
+    const response = await fetch("/api/diagnostics/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo: $("#repo-input").value || state.repo }),
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.error) throw new Error(payload.error || "Could not export diagnostics.");
+    setText(
+      "#export-diagnostics-status",
+      `${payload.export.filename} saved locally. No workspace path or adapter output is inside the file.`,
+    );
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function advancedTabTarget(tabName) {
   return {
     integrations: ".advanced-integrations-card",
@@ -1641,6 +1668,9 @@ function initAdvancedSettingsControls() {
         target.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     });
+  });
+  $("#export-diagnostics-button")?.addEventListener("click", () => {
+    exportSanitizedDiagnostics().catch((error) => setText("#export-diagnostics-status", error.message));
   });
 }
 
@@ -2340,6 +2370,110 @@ function goalStatusLabel(status) {
   }[status] || String(status || "Unknown").replaceAll("-", " ");
 }
 
+function buildGoalHistoryRow(goal, statusSelector = "#goal-history-summary", testId = "goal-history-row") {
+  const row = document.createElement("article");
+  row.className = "goal-history-row";
+  row.dataset.goalId = goal.goal_id;
+  row.dataset.testid = testId;
+
+  const identity = document.createElement("div");
+  identity.className = "goal-history-identity";
+  const type = document.createElement("span");
+  type.textContent = goal.goal_type === "corrective" ? `Corrective goal ${goal.correction_index}` : `${goal.goal_type} goal`;
+  const objective = document.createElement("strong");
+  objective.textContent = goal.objective || goal.goal_id;
+  const id = document.createElement("small");
+  id.textContent = goal.goal_id;
+  identity.append(type, objective, id);
+
+  const detail = document.createElement("div");
+  detail.className = "goal-history-detail";
+  const stage = document.createElement("span");
+  const receiptReady = Boolean(goal.receipt?.valid);
+  const reviewReady = Boolean(goal.review?.valid);
+  stage.textContent = `Diagnosis saved / Goal saved / Receipt ${receiptReady ? "received" : "waiting"} / Review ${reviewReady ? "recorded" : "waiting"}`;
+  const summary = document.createElement("p");
+  summary.textContent = reviewReady
+    ? goal.review.summary || "Review recorded locally."
+    : receiptReady
+      ? goal.receipt.summary || "Codex reports the goal is ready for review."
+      : goal.receipt?.status === "invalid"
+        ? goal.receipt.error || "The return receipt could not be validated."
+        : "Waiting for Codex to write the local return receipt.";
+  const lineage = document.createElement("small");
+  const grade = goal.grade_movement ? `Grade: ${goal.grade_movement}. ` : "";
+  const parent = goal.parent_goal_id ? `Follows ${goal.parent_goal_id}. ` : "";
+  const children = goal.child_goal_ids?.length ? `${goal.child_goal_ids.length} corrective follow-up${goal.child_goal_ids.length === 1 ? "" : "s"}.` : "";
+  lineage.textContent = `${grade}${parent}${children}`.trim() || "Original goal.";
+  detail.append(stage, summary, lineage);
+
+  const status = document.createElement("div");
+  status.className = "goal-history-status";
+  const badge = document.createElement("span");
+  badge.className = "goal-history-badge";
+  badge.dataset.status = goal.lifecycle_status;
+  badge.textContent = goalStatusLabel(goal.lifecycle_status);
+  const actions = document.createElement("div");
+  actions.className = "goal-history-actions";
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "compact-button";
+  copy.textContent = "Copy goal";
+  copy.addEventListener("click", () => {
+    copyText(goal.goal_markdown)
+      .then(() => setText(statusSelector, `Copied ${goal.goal_id}.`))
+      .catch((error) => setText(statusSelector, error.message));
+  });
+  actions.appendChild(copy);
+
+  if (goal.lifecycle_status === "ready-for-review") {
+    const review = document.createElement("button");
+    review.type = "button";
+    review.className = "compact-button primary-action";
+    review.textContent = "Review now";
+    review.addEventListener("click", () => {
+      reviewGoalById(goal.goal_id).catch((error) => setText(statusSelector, error.message));
+    });
+    actions.appendChild(review);
+  }
+  if (goal.lifecycle_status === "needs-correction") {
+    const corrective = document.createElement("button");
+    corrective.type = "button";
+    corrective.className = "compact-button primary-action";
+    corrective.textContent = "Create corrective goal";
+    corrective.addEventListener("click", () => {
+      createCorrectiveGoal(goal.goal_id).catch((error) => setText(statusSelector, error.message));
+    });
+    actions.appendChild(corrective);
+  }
+  status.append(badge, actions);
+  row.append(identity, detail, status);
+  return row;
+}
+
+function renderReviewInbox() {
+  const panel = $("#home-review-inbox");
+  const list = $("#review-inbox-list");
+  if (!panel || !list) return;
+  const actionable = (state.goals || []).filter((goal) =>
+    ["ready-for-review", "needs-correction", "receipt-invalid"].includes(goal.lifecycle_status),
+  );
+  panel.hidden = actionable.length === 0;
+  clear(list);
+  if (!actionable.length) return;
+  const ready = actionable.filter((goal) => goal.lifecycle_status === "ready-for-review").length;
+  const correction = actionable.filter((goal) => goal.lifecycle_status === "needs-correction").length;
+  const invalid = actionable.length - ready - correction;
+  setText(
+    "#review-inbox-summary",
+    ready ? `${ready} ready now` : correction ? `${correction} need correction` : `${invalid} receipt${invalid === 1 ? "" : "s"} need attention`,
+  );
+  actionable.forEach((goal) => {
+    list.appendChild(buildGoalHistoryRow(goal, "#review-inbox-summary", "review-inbox-row"));
+  });
+}
+
 function renderGoalHistory() {
   const list = $("#goal-history-list");
   if (!list) return;
@@ -2358,88 +2492,7 @@ function renderGoalHistory() {
     list.appendChild(empty);
     return;
   }
-
-  goals.forEach((goal) => {
-    const row = document.createElement("article");
-    row.className = "goal-history-row";
-    row.dataset.goalId = goal.goal_id;
-    row.dataset.testid = "goal-history-row";
-
-    const identity = document.createElement("div");
-    identity.className = "goal-history-identity";
-    const type = document.createElement("span");
-    type.textContent = goal.goal_type === "corrective" ? `Corrective goal ${goal.correction_index}` : `${goal.goal_type} goal`;
-    const objective = document.createElement("strong");
-    objective.textContent = goal.objective || goal.goal_id;
-    const id = document.createElement("small");
-    id.textContent = goal.goal_id;
-    identity.append(type, objective, id);
-
-    const detail = document.createElement("div");
-    detail.className = "goal-history-detail";
-    const stage = document.createElement("span");
-    const receiptReady = Boolean(goal.receipt?.valid);
-    const reviewReady = Boolean(goal.review?.valid);
-    stage.textContent = `Diagnosis saved / Goal saved / Receipt ${receiptReady ? "received" : "waiting"} / Review ${reviewReady ? "recorded" : "waiting"}`;
-    const summary = document.createElement("p");
-    summary.textContent = reviewReady
-      ? goal.review.summary || "Review recorded locally."
-      : receiptReady
-        ? goal.receipt.summary || "Codex reports the goal is ready for review."
-        : goal.receipt?.status === "invalid"
-          ? goal.receipt.error || "The return receipt could not be validated."
-          : "Waiting for Codex to write the local return receipt.";
-    const lineage = document.createElement("small");
-    const grade = goal.grade_movement ? `Grade: ${goal.grade_movement}. ` : "";
-    const parent = goal.parent_goal_id ? `Follows ${goal.parent_goal_id}. ` : "";
-    const children = goal.child_goal_ids?.length ? `${goal.child_goal_ids.length} corrective follow-up${goal.child_goal_ids.length === 1 ? "" : "s"}.` : "";
-    lineage.textContent = `${grade}${parent}${children}`.trim() || "Original goal.";
-    detail.append(stage, summary, lineage);
-
-    const status = document.createElement("div");
-    status.className = "goal-history-status";
-    const badge = document.createElement("span");
-    badge.className = "goal-history-badge";
-    badge.dataset.status = goal.lifecycle_status;
-    badge.textContent = goalStatusLabel(goal.lifecycle_status);
-    const actions = document.createElement("div");
-    actions.className = "goal-history-actions";
-
-    const copy = document.createElement("button");
-    copy.type = "button";
-    copy.className = "compact-button";
-    copy.textContent = "Copy goal";
-    copy.addEventListener("click", () => {
-      copyText(goal.goal_markdown)
-        .then(() => setText("#goal-history-summary", `Copied ${goal.goal_id}.`))
-        .catch((error) => setText("#goal-history-summary", error.message));
-    });
-    actions.appendChild(copy);
-
-    if (goal.lifecycle_status === "ready-for-review") {
-      const review = document.createElement("button");
-      review.type = "button";
-      review.className = "compact-button primary-action";
-      review.textContent = "Review now";
-      review.addEventListener("click", () => {
-        reviewGoalById(goal.goal_id).catch((error) => setText("#goal-history-summary", error.message));
-      });
-      actions.appendChild(review);
-    }
-    if (goal.lifecycle_status === "needs-correction") {
-      const corrective = document.createElement("button");
-      corrective.type = "button";
-      corrective.className = "compact-button primary-action";
-      corrective.textContent = "Create corrective goal";
-      corrective.addEventListener("click", () => {
-        createCorrectiveGoal(goal.goal_id).catch((error) => setText("#goal-history-summary", error.message));
-      });
-      actions.appendChild(corrective);
-    }
-    status.append(badge, actions);
-    row.append(identity, detail, status);
-    list.appendChild(row);
-  });
+  goals.forEach((goal) => list.appendChild(buildGoalHistoryRow(goal)));
 }
 
 async function refreshGoalHistory() {
@@ -2450,7 +2503,9 @@ async function refreshGoalHistory() {
     const payload = await response.json();
     if (!response.ok || payload.error) throw new Error(payload.error || "Could not refresh goal history.");
     state.goals = payload.goals || [];
+    renderReviewInbox();
     renderGoalHistory();
+    renderGoalBuilder();
   } finally {
     state.goalHistoryTimer = window.setTimeout(() => {
       refreshGoalHistory().catch((error) => setText("#goal-history-summary", error.message));
@@ -2467,6 +2522,7 @@ async function createCorrectiveGoal(goalId) {
   const payload = await response.json();
   if (!response.ok || payload.error) throw new Error(payload.error || "Could not create the corrective goal.");
   state.goalDraft = { goalType: "corrective", preview: payload.goal, saved: payload.goal };
+  state.goalHandoffStage = "saved";
   renderGoalBuilder();
   $("#goal-dialog")?.showModal();
   await refreshGoalHistory();
@@ -2799,6 +2855,18 @@ function renderGoalBuilder() {
   });
   const reviewButton = $("#goal-review-button");
   if (reviewButton) reviewButton.hidden = true;
+  const savedGoal = draft.saved;
+  const savedHistory = savedGoal
+    ? (state.goals || []).find((goal) => goal.goal_id === savedGoal.goal_id)
+    : null;
+  const receiptReady = savedHistory?.lifecycle_status === "ready-for-review";
+  const stageRank = { preview: 0, saved: 1, copied: 2, opened: 2 }[state.goalHandoffStage] || 0;
+  const saveStep = $("#goal-handoff-save");
+  const codexStep = $("#goal-handoff-codex");
+  const returnStep = $("#goal-handoff-return");
+  if (saveStep) saveStep.dataset.state = savedGoal ? "done" : ready ? "current" : "waiting";
+  if (codexStep) codexStep.dataset.state = receiptReady || stageRank >= 2 ? "done" : savedGoal ? "current" : "waiting";
+  if (returnStep) returnStep.dataset.state = receiptReady ? "done" : stageRank >= 2 ? "current" : "waiting";
   if (draft.saved) {
     setText("#goal-dialog-status", `Saved locally as ${draft.saved.goal_id}.`);
   }
@@ -2854,14 +2922,19 @@ async function ensureGoalSaved() {
   if (!response.ok || data.error) throw new Error(data.error || "Could not save the Codex goal.");
   state.goalDraft.saved = data.goal;
   state.goalDraft.preview = data.goal;
+  state.goalHandoffStage = "saved";
   renderGoalBuilder();
   return data.goal;
 }
 
 async function copyText(value) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (error) {
+      console.warn("Clipboard API unavailable; using the local selection fallback.", error);
+    }
   }
   const textarea = document.createElement("textarea");
   textarea.value = value;
@@ -2869,13 +2942,16 @@ async function copyText(value) {
   textarea.style.opacity = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   textarea.remove();
+  if (!copied) throw new Error("The goal could not be copied. Select the goal text and copy it manually.");
 }
 
 async function copyCodexGoal() {
   const goal = await ensureGoalSaved();
   await copyText(goal.goal_markdown);
+  state.goalHandoffStage = "copied";
+  renderGoalBuilder();
   setText("#goal-dialog-status", `Copied ${goal.goal_id}. Set it as the goal in the Codex project chat.`);
 }
 
@@ -2890,6 +2966,8 @@ async function openGoalInCodex() {
   });
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || "Could not open the Codex workspace.");
+  state.goalHandoffStage = "opened";
+  renderGoalBuilder();
   setText("#goal-dialog-status", "Repository opened in Codex and the goal is copied. Choose the project chat and paste it.");
 }
 
@@ -2925,6 +3003,7 @@ function selectGoalType(goalType) {
     preview: null,
     saved: null,
   };
+  state.goalHandoffStage = "preview";
   renderGoalBuilder();
   scheduleGoalPreview(0);
 }
@@ -2933,6 +3012,7 @@ function openGoalBuilder() {
   if (!(state.simpleRun.status === "succeeded" && state.simpleRun.result)) return;
   state.goalSource = null;
   state.goalDraft = { goalType: "maintenance", preview: null, saved: null };
+  state.goalHandoffStage = "preview";
   const expansionInput = $("#goal-expansion-input");
   if (expansionInput) expansionInput.value = "";
   renderGoalBuilder();
@@ -3196,6 +3276,7 @@ function openGoalBuilderFromComparison() {
     comparisonId: comparison.comparisonId,
   };
   state.goalDraft = { goalType: "maintenance", preview: null, saved: null };
+  state.goalHandoffStage = "preview";
   const expansionInput = $("#goal-expansion-input");
   if (expansionInput) expansionInput.value = "";
   $("#comparison-dialog")?.close();
@@ -3569,14 +3650,38 @@ async function runSimpleMission() {
   if (keepPolling) await pollSimpleRunner(packet.packet_id);
 }
 
+function renderFirstRunSetup(data) {
+  const setup = $("#first-run-setup");
+  if (!setup) return;
+  const hasWorkspaceHistory = Boolean((data.recent_packets || []).length || (state.goals || []).length);
+  setup.hidden = hasWorkspaceHistory || state.simpleRun.status !== "idle";
+  setText("#first-run-workspace", `${data.repo_name || "Workspace"} is ready`);
+  const workers = data.runner_adapters || [];
+  const ready = workers.filter((adapter) => adapter.available);
+  const workerStep = $("#first-run-workers");
+  if (workerStep) {
+    workerStep.dataset.state = ready.length ? "ready" : "attention";
+    const title = workerStep.querySelector("strong");
+    const detail = workerStep.querySelector("small");
+    if (title) title.textContent = ready.length
+      ? `${ready.length} local worker${ready.length === 1 ? "" : "s"} ready`
+      : "No local worker is ready";
+    if (detail) detail.textContent = ready.length
+      ? ready.map((adapter) => adapter.name).join(", ")
+      : "Set up Codex, Hermes, or OpenClaw outside Hamiltonian";
+  }
+}
+
 function renderMissionHome(data) {
   if (!data) return;
   const home = $("#mission-home");
   if (!home) return;
   home.dataset.packetId = state.simpleRun.packetId || "";
   setText("#simple-task-count", `${$("#simple-task-input")?.value.length || 0}/600`);
+  renderFirstRunSetup(data);
   renderSimpleLanePicker(data);
   renderSimpleRunExperience();
+  renderReviewInbox();
   renderHomeRecentPackets(data);
   renderComparisonHistory();
   renderGoalHistory();
@@ -5328,6 +5433,16 @@ function initMissionHomeControls() {
       }
     });
   }
+
+  document.querySelectorAll("[data-first-task]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!taskInput) return;
+      taskInput.value = FIRST_RUN_TASKS[button.dataset.firstTask] || "";
+      taskInput.dispatchEvent(new Event("input", { bubbles: true }));
+      taskInput.focus();
+      taskInput.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  });
 
   document.querySelectorAll("input[name='simple-agent-lane']").forEach((input) => {
     input.addEventListener("change", () => {

@@ -182,6 +182,11 @@ const journeyExpression = String.raw`
   );
   if (visibleNav.length !== 4) throw new Error('Expected four primary navigation choices, found ' + visibleNav.length);
   if (q('#simple-run-options')?.open) throw new Error('Advanced run options should start closed');
+  if (q('#first-run-setup')?.hidden) throw new Error('First-run setup should be visible in an empty workspace');
+  click('[data-first-task="health"]');
+  if (!q('#simple-task-input')?.value.includes('read-only health check')) {
+    throw new Error('First-run health template did not populate the job');
+  }
 
   const codexAdapter = state.data.runner_adapters.find((adapter) => adapter.id === 'codex');
   if (!codexAdapter?.available) throw new Error('Codex fake adapter was not reported ready');
@@ -446,6 +451,15 @@ const journeyExpression = String.raw`
   await waitFor(() => q('[data-testid="goal-preview"]')?.textContent.includes('B to B+'), 'maintenance grade target');
   click('#goal-save-button');
   await waitFor(() => q('#goal-dialog-status')?.textContent.includes('Saved locally'), 'saved maintenance goal');
+  if (q('#goal-handoff-save')?.dataset.state !== 'done' || q('#goal-handoff-codex')?.dataset.state !== 'current') {
+    throw new Error('Saved goal did not advance the handoff steps');
+  }
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async () => true },
+  });
+  click('#goal-copy-button');
+  await waitFor(() => q('#goal-handoff-return')?.dataset.state === 'current', 'copied goal handoff step');
   const goalsResponse = await fetch('/api/goals?repo=' + encodeURIComponent(repo));
   const goalsPayload = await goalsResponse.json();
   if (!goalsResponse.ok || !goalsPayload.goals?.length) throw new Error('Saved maintenance goal missing from API');
@@ -459,6 +473,12 @@ const journeyExpression = String.raw`
   );
   if (q('#goal-open-codex-button')?.disabled) throw new Error('Open in Codex should be available for a valid goal');
   click('#goal-dialog-close');
+
+  click('#export-diagnostics-button');
+  await waitFor(
+    () => q('#export-diagnostics-status')?.textContent.includes('saved locally'),
+    'sanitized diagnostics export',
+  );
 
   return {
     ok: true,
@@ -510,10 +530,10 @@ const goalLifecycleExpression = String.raw`
   };
   await refreshGoalHistory();
   const readyRow = await waitFor(
-    () => [...document.querySelectorAll('[data-testid="goal-history-row"]')].find(
+    () => [...document.querySelectorAll('[data-testid="review-inbox-row"]')].find(
       (row) => row.querySelector('.goal-history-badge')?.dataset.status === 'ready-for-review',
     ),
-    'review-ready goal history row',
+    'review-ready inbox row',
   );
   const reviewButton = [...readyRow.querySelectorAll('button')].find((button) => button.textContent === 'Review now');
   if (!reviewButton) throw new Error('Review action was not shown for the valid receipt');
@@ -521,7 +541,7 @@ const goalLifecycleExpression = String.raw`
   await waitFor(() => document.querySelector('[data-testid="simple-status"]')?.dataset.status === 'succeeded', 'goal review completion');
   await refreshGoalHistory();
   const correctionRow = await waitFor(
-    () => [...document.querySelectorAll('[data-testid="goal-history-row"]')].find(
+    () => [...document.querySelectorAll('[data-testid="review-inbox-row"]')].find(
       (row) => row.querySelector('.goal-history-badge')?.dataset.status === 'needs-correction',
     ),
     'incomplete review status',
@@ -709,8 +729,75 @@ print(json.dumps({
     });
     await client.send("Page.navigate", { url: appUrl });
     await evaluate(client, "new Promise((resolve) => { if (document.readyState === 'complete') resolve(true); else window.addEventListener('load', () => resolve(true), { once: true }); })");
+    await evaluate(client, `(async () => {
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline && document.querySelector('#repo-name')?.textContent === 'Loading') {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const firstRunPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-first-run-desktop.jpg"),
+    );
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: true,
+    });
+    const firstRunMobilePath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-first-run-mobile.jpg"),
+    );
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
 
     const result = await evaluate(client, journeyExpression);
+    await evaluate(client, `(async () => {
+      const response = await fetch('/api/goals?repo=' + encodeURIComponent(document.querySelector('#repo-input').value));
+      const payload = await response.json();
+      const goal = payload.goals.find((item) => item.goal_id === ${JSON.stringify(result.maintenance_goal_id)});
+      const displayGoal = {
+        ...goal,
+        repo: 'D:\\\\Projects\\\\Hamiltonian-Demo',
+        goal_markdown: goal.goal_markdown
+          .replaceAll(goal.repo, 'D:\\\\Projects\\\\Hamiltonian-Demo')
+          .replace('Baseline commit: \`unavailable\`', 'Baseline commit: \`4cc450b5112ed0aa1de036d0e4141232e99c3237\`'),
+      };
+      state.goalDraft = { goalType: 'maintenance', preview: displayGoal, saved: displayGoal };
+      state.goalHandoffStage = 'copied';
+      renderGoalBuilder();
+      document.querySelector('#goal-dialog')?.showModal();
+      document.querySelector('#goal-dialog')?.scrollTo(0, 0);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`);
+    const goalHandoffPath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-goal-handoff-desktop.jpg"),
+    );
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: true,
+    });
+    const goalHandoffMobilePath = await captureJpeg(
+      client,
+      path.join(qaRoot, "hamiltonian-goal-handoff-mobile.jpg"),
+    );
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
     await evaluate(client, `(async () => {
       document.querySelector('#goal-dialog')?.close();
       document.querySelector('#comparison-dialog')?.showModal();
@@ -778,7 +865,7 @@ print(json.dumps({
       document.querySelectorAll('[data-testid="home-recent-packet"] strong').forEach((node, index) => {
         if (titles[index]) node.textContent = titles[index];
       });
-      document.querySelector('#home-goal-history')?.scrollIntoView({ block: 'start' });
+      document.querySelector('#home-review-inbox')?.scrollIntoView({ block: 'start' });
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       return true;
     })()`);
@@ -948,7 +1035,7 @@ print(json.dumps({
           last_opened: "2026-07-10T00:00:00Z",
         },
       ]),
-    ).replace("__HAMILTONIAN_VERSION__", "0.8.0");
+    ).replace("__HAMILTONIAN_VERSION__", "0.9.0");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -969,6 +1056,10 @@ print(json.dumps({
       ...result,
       ...goalLifecycle,
       screenshots: {
+        first_run: firstRunPath,
+        first_run_mobile: firstRunMobilePath,
+        goal_handoff: goalHandoffPath,
+        goal_handoff_mobile: goalHandoffMobilePath,
         mission_home: homePath,
         capability_refusal: capabilityRefusalPath,
         openclaw_embedded: openClawPath,
@@ -981,7 +1072,10 @@ print(json.dumps({
         launcher: launcherPath,
       },
     }, null, 2));
-    await client.send("Browser.close").catch(() => {});
+    await Promise.race([
+      client.send("Browser.close").catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
   } catch (error) {
     if (serverOutput.trim()) console.error(serverOutput.trim());
     throw error;

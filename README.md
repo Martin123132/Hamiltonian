@@ -79,11 +79,13 @@ Hamiltonian copies the goal and can open the repository in Codex, but the user
 still chooses the destination project task. It never injects work into another
 task automatically.
 
+![Hamiltonian Codex goal handoff](docs/images/goal-handoff-desktop.jpg)
+
 ### 4. Review the return receipt
 
-When Codex writes `return.json`, Goal history notices it automatically and
-shows **Review now**. Hamiltonian then runs a local, read-only check against the
-saved baseline and acceptance criteria.
+When Codex writes `return.json`, the Review inbox notices it automatically and
+shows **Review now** above ordinary history. Hamiltonian then runs a local,
+read-only check against the saved baseline and acceptance criteria.
 
 ![Goal ready for review](docs/images/goal-ready-desktop.jpg)
 
@@ -100,7 +102,8 @@ history.
 The native Windows shell opens on a workspace launcher, remembers recent local
 repositories, and highlights goals that are ready for review. The same core
 workflow adapts to a narrow mobile-sized viewport for remote desktop or compact
-windows.
+windows. Empty workspaces offer three bounded first-run checks, while returned
+Codex goals appear in a review inbox before ordinary packet and goal history.
 
 <table>
   <tr>
@@ -109,7 +112,22 @@ windows.
   </tr>
 </table>
 
-## Version 0.8.0
+## Version 0.9.0
+
+- Guided first-run workspace check with repository health, setup verification,
+  and bounded-improvement starting points.
+- Live local worker readiness before the first launch, with all four worker
+  choices presented in one stable desktop row.
+- Review inbox that promotes valid Codex return receipts and corrective work
+  above ordinary packet and goal history.
+- Three-step goal handoff state: save locally, set in the Codex project task,
+  and return to Hamiltonian for receipt-backed review.
+- Explicit sanitized diagnostics export containing aggregate runtime state but
+  no workspace path, task text, adapter output, credentials, or remote upload.
+- Browser regression coverage for first-run guidance, goal handoff progress,
+  review inbox actions, diagnostics export, and desktop/mobile rendering.
+
+### Included From 0.8.0
 
 - Public source-available governance under the established TWO HANDS NETWORK LTD PolyForm Noncommercial terms.
 - Plain-language commercial-use notice and contribution relicensing boundary.
@@ -248,9 +266,9 @@ The build also writes:
 D:\Hamiltonian\Builds\Hamiltonian.lnk
 D:\Hamiltonian\Builds\dist\Hamiltonian\build-info.json
 D:\Hamiltonian\Builds\dist\Hamiltonian\SHA256SUMS.txt
-D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.8.0.zip
-D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.8.0.release.json
-D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.8.0.sha256
+D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.9.0.zip
+D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.9.0.release.json
+D:\Hamiltonian\Builds\Hamiltonian-windows-x64-0.9.0.sha256
 ```
 
 The shortcut opens the workspace launcher and points its application data at
@@ -278,6 +296,12 @@ icon without writing packaging caches to `C:`.
 Desktop runtime failures write sanitized local reports under
 `<data-dir>\crashes\`. Reports omit absolute paths, secret-like values, file
 contents, environment variables, and remote URLs. They are never uploaded.
+
+The Advanced screen can also create an operator-requested diagnostics file
+under `<workspace>\.hamiltonian\diagnostics\`. It contains version, aggregate
+packet and goal counts, Git state, and boolean adapter availability. It omits
+workspace paths, task text, file contents, raw adapter output, environment
+variables, and credentials, and it is never uploaded automatically.
 
 The normal cockpit flow is deliberately short:
 
