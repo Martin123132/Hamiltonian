@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Hamiltonian</title>
-    <link rel="stylesheet" href="/styles.css?v=hamiltonian-codex-goals-v1" />
+    <link rel="stylesheet" href="/styles.css?v=hamiltonian-v090-guided-loop" />
   </head>
   <body>
     <div class="shell">
@@ -75,6 +75,24 @@
             <p class="eyebrow">New local job</p>
             <h2>What do you want done?</h2>
           </header>
+
+          <section id="first-run-setup" class="first-run-setup" aria-labelledby="first-run-title" hidden>
+            <div class="first-run-copy">
+              <p class="eyebrow">First local run</p>
+              <h3 id="first-run-title">Start with a bounded repository check</h3>
+              <p id="first-run-boundary">Choose a starting point below. Nothing runs until you press Run locally.</p>
+            </div>
+            <ol class="first-run-readiness" aria-label="Workspace readiness">
+              <li data-state="ready"><span>1</span><div><strong id="first-run-workspace">Workspace ready</strong><small>Selected folder only</small></div></li>
+              <li id="first-run-workers" data-state="checking"><span>2</span><div><strong>Checking workers</strong><small>Local adapters only</small></div></li>
+              <li data-state="next"><span>3</span><div><strong>Choose the first check</strong><small>You stay in control</small></div></li>
+            </ol>
+            <div class="first-run-actions" aria-label="First job templates">
+              <button type="button" data-first-task="health">Repository health</button>
+              <button type="button" data-first-task="setup">Check current setup</button>
+              <button type="button" data-first-task="next">Find next improvement</button>
+            </div>
+          </section>
 
           <form id="simple-run-form" class="simple-run-surface">
             <label for="simple-task-input">Task</label>
@@ -184,6 +202,17 @@
             </div>
           </section>
 
+          <section id="home-review-inbox" class="review-inbox" aria-labelledby="review-inbox-title" hidden>
+            <div class="simple-section-head">
+              <div>
+                <p class="eyebrow">Returned from Codex</p>
+                <h3 id="review-inbox-title">Review inbox</h3>
+              </div>
+              <span id="review-inbox-summary" class="goal-history-summary">Nothing waiting</span>
+            </div>
+            <div id="review-inbox-list" class="goal-history-list" aria-live="polite"></div>
+          </section>
+
           <section id="home-recent-panel" class="simple-recent" aria-label="Recent work">
             <div class="simple-section-head">
               <h3>Recent work</h3>
@@ -250,6 +279,12 @@
             </div>
             <pre id="goal-preview" class="goal-preview" data-testid="goal-preview">Generating goal...</pre>
           </section>
+
+          <ol id="goal-handoff-steps" class="goal-handoff-steps" aria-label="Codex handoff steps">
+            <li id="goal-handoff-save" data-state="current"><span>1</span><div><strong>Save the goal</strong><small>Hamiltonian keeps the goal and return location together.</small></div></li>
+            <li id="goal-handoff-codex" data-state="waiting"><span>2</span><div><strong>Set it in the project task</strong><small>Copy the goal or open the workspace in Codex.</small></div></li>
+            <li id="goal-handoff-return" data-state="waiting"><span>3</span><div><strong>Return for review</strong><small>Hamiltonian detects the completed local receipt.</small></div></li>
+          </ol>
 
           <p id="goal-dialog-status" class="goal-dialog-status" aria-live="polite">Goal preview stays local.</p>
 
@@ -1121,6 +1156,10 @@
                   <span id="advanced-debug-state" class="create-mini-chip">Off</span>
                 </div>
                 <div id="advanced-debug-settings" class="advanced-setting-list"></div>
+                <div class="advanced-card-actions">
+                  <button id="export-diagnostics-button" class="compact-button" type="button">Export sanitized diagnostics</button>
+                  <span id="export-diagnostics-status" aria-live="polite">No diagnostic file created.</span>
+                </div>
               </section>
 
               <section class="advanced-card advanced-about-card">
@@ -1163,6 +1202,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=hamiltonian-design-v1-shell-7"></script>
+    <script src="/app.js?v=hamiltonian-v090-guided-loop"></script>
   </body>
 </html>

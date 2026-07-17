@@ -983,11 +983,15 @@ def test_static_ui_targets_packet_api() -> None:
 
     assert 'id="packet-list"' in html
     assert 'id="packet-detail"' in html
-    assert "hamiltonian-codex-goals-v1" in html
+    assert "hamiltonian-v090-guided-loop" in html
     assert 'id="mission-home"' in html
     assert 'id="local-first-badge"' in html
     assert "Local-first | remote execution: off" in html
     assert 'id="simple-run-form"' in html
+    assert 'id="first-run-setup"' in html
+    assert 'data-first-task="health"' in html
+    assert 'data-first-task="setup"' in html
+    assert 'data-first-task="next"' in html
     assert 'id="simple-task-input"' in html
     assert 'data-testid="simple-task"' in html
     assert 'id="simple-run-button"' in html
@@ -1042,12 +1046,18 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="goal-save-button"' in html
     assert 'id="goal-open-codex-button"' in html
     assert 'id="goal-review-button"' in html
+    assert 'id="goal-handoff-steps"' in html
+    assert 'id="goal-handoff-save"' in html
+    assert 'id="goal-handoff-codex"' in html
+    assert 'id="goal-handoff-return"' in html
     assert 'id="simple-step-check"' in html
     assert 'id="simple-step-run"' in html
     assert 'id="simple-step-done"' in html
     assert "<span>[]</span>" not in html
     assert 'id="home-recent-packets"' in html
     assert 'id="home-goal-history"' in html
+    assert 'id="home-review-inbox"' in html
+    assert 'id="review-inbox-list"' in html
     assert 'id="goal-history-list"' in html
     assert 'id="goal-history-summary"' in html
     assert 'data-page-target="create"' in html
@@ -1116,6 +1126,8 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'id="advanced-privacy-settings"' in html
     assert 'id="advanced-debug-settings"' in html
     assert 'id="advanced-debug-state"' in html
+    assert 'id="export-diagnostics-button"' in html
+    assert 'id="export-diagnostics-status"' in html
     assert 'id="next-build"' in html
     assert 'id="mission-path"' in html
     assert 'id="mission-next"' in html
@@ -1183,6 +1195,8 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function renderRouteCompass" in app
     assert "function initRouteSelectionControls" in app
     assert "function renderMissionHome" in app
+    assert "function renderFirstRunSetup" in app
+    assert "const FIRST_RUN_TASKS" in app
     assert 'const PAGE_ORDER = ["start", "create", "map", "learn", "routes", "gates", "recorder"' in app
     assert '"handoff", "packets"' in app
     assert 'cockpit: "create"' in app
@@ -1224,6 +1238,7 @@ def test_static_ui_targets_packet_api() -> None:
     assert 'data-advanced-tab="about"' in html
     assert "Crash diagnostics" in app
     assert "function initAdvancedSettingsControls" in app
+    assert "function exportSanitizedDiagnostics" in app
     assert "function advancedTabTarget" in app
     assert "advanced-route-score" in app
     assert "advanced-tab-active" in app
@@ -1255,6 +1270,8 @@ def test_static_ui_targets_packet_api() -> None:
     assert "function openGoalInCodex" in app
     assert "function reviewCompletedGoal" in app
     assert "function renderGoalHistory" in app
+    assert "function renderReviewInbox" in app
+    assert "function buildGoalHistoryRow" in app
     assert "function refreshGoalHistory" in app
     assert "function reviewGoalById" in app
     assert "function createCorrectiveGoal" in app
@@ -1334,6 +1351,10 @@ def test_static_ui_targets_packet_api() -> None:
     assert ".advanced-settings-layout" in styles
     assert ".advanced-route-bar" in styles
     assert ".advanced-setting-row" in styles
+    assert ".first-run-setup" in styles
+    assert ".review-inbox" in styles
+    assert ".goal-handoff-steps" in styles
+    assert ".advanced-card-actions" in styles
     assert "function packetStatusRows" in app
     assert 'label: "Runner plan"' in app
     assert 'row.dataset.testid = `packet-status-${String(item.label' in app

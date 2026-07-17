@@ -17,6 +17,7 @@ from .comparisons import (
     list_result_comparisons,
     save_comparison_decision,
 )
+from .diagnostics import export_sanitized_diagnostics
 from .goals import (
     create_corrective_goal,
     create_goal_package,
@@ -156,6 +157,17 @@ class CockpitHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/diagnostics/export":
+            try:
+                payload = self._read_json()
+                repo = self._requested_repo(str(payload.get("repo") or str(self.repo)))
+                export = export_sanitized_diagnostics(repo)
+                self._write_json({"export": export}, status=HTTPStatus.CREATED)
+            except ValueError as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._write_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path.startswith("/api/comparisons/") and parsed.path.endswith("/decision"):
             comparison_id = unquote(
                 parsed.path.removeprefix("/api/comparisons/").removesuffix("/decision")
