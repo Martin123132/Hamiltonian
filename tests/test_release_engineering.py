@@ -57,7 +57,7 @@ def test_ci_uses_pinned_actions_and_read_only_defaults() -> None:
     assert "pull_request_target" not in ci
     assert "persist-credentials: false" in ci
     assert "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" in ci
-    assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in ci
+    assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in ci
     assert "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" in ci
     assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in ci
     assert 'python-version: ["3.10", "3.13"]' in ci
