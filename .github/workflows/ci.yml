@@ -68,7 +68,7 @@ jobs:
           HAMILTONIAN_QA_ROOT: ${{ runner.temp }}\HamiltonianQA
       - name: Upload browser screenshots
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-smoke-screenshots-${{ github.run_attempt }}
           path: ${{ runner.temp }}\HamiltonianQA\*.jpg
@@ -121,7 +121,7 @@ jobs:
             if ($required -notin $entryNames) { throw "Release archive is missing $required" }
           }
       - name: Upload portable desktop package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hamiltonian-windows-x64-${{ github.sha }}
           path: |
